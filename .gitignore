@@ -1,0 +1,52 @@
+# ──── macOS ────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ──── Xcode ────
+## Build artifacts
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+## Index / logs
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+IDEWorkspaceChecks.plist
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playground
+timeline.xctimeline
+playground.xcworkspace
+
+# ──── Swift Package Manager ────
+.build/
+.swiftpm/
+Package.resolved
+Engine/.build/
+Engine/.swiftpm/
+
+# ──── Metal Caster project data ────
+## User-specific project data (auto-saved scenes, library cache)
+Library/
+
+# ──── Cursor / IDE ────
+.cursor/
+
+# ──── Environment & secrets ────
+.env
+.env.*
+*.pem
+credentials.json
+
+# ──── Miscellaneous ────
+*.log
+*.tmp
+*.swp
+*~
+Thumbs.db
