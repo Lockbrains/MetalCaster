@@ -471,6 +471,9 @@ struct AssetListRow: View {
                     handleDoubleClick()
                 } else {
                     lastClickTime = now
+                    if entry.fileExtension == "mcmat" {
+                        state.selectedEntity = nil
+                    }
                     state.selectedAssetEntry = entry
                 }
             }
@@ -513,6 +516,7 @@ struct AssetListRow: View {
         .frame(height: MCTheme.rowHeight)
         .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
         .contentShape(Rectangle())
+        .draggable(entry.guid.uuidString)
     }
 
     @ViewBuilder

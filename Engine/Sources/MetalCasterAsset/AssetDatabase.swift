@@ -171,6 +171,25 @@ public final class AssetDatabase: @unchecked Sendable {
         notifyObservers(category: category, changes: [.added(folderEntry)])
     }
 
+    /// Returns all non-directory asset entries recursively for a category.
+    public func allEntries(in category: AssetCategory) -> [AssetEntry] {
+        var result: [AssetEntry] = []
+        collectEntries(in: category, subfolder: nil, into: &result)
+        return result
+    }
+
+    private func collectEntries(in category: AssetCategory, subfolder: String?, into result: inout [AssetEntry]) {
+        let items = entries(in: category, subfolder: subfolder)
+        for entry in items {
+            if entry.isDirectory {
+                let sub = subfolder.map { $0 + "/" + entry.name } ?? entry.name
+                collectEntries(in: category, subfolder: sub, into: &result)
+            } else {
+                result.append(entry)
+            }
+        }
+    }
+
     // MARK: - Search
 
     public func search(query: String, category: AssetCategory? = nil) -> [AssetEntry] {

@@ -1066,6 +1066,23 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                                                  length: MemoryLayout<UInt32>.stride,
                                                  index: 4)
                     }
+
+                    // Bind custom shader parameters at buffer 5
+                    let shaderSource = drawCall.material.unifiedShaderSource ?? drawCall.material.fragmentShaderSource
+                    if !shaderSource.isEmpty {
+                        let shaderParams = ShaderParameterParser.parse(source: shaderSource)
+                        if !shaderParams.isEmpty {
+                            var packed = ShaderParameterParser.packParameters(
+                                params: shaderParams,
+                                values: drawCall.material.parameters
+                            )
+                            if !packed.isEmpty {
+                                encoder.setFragmentBytes(&packed,
+                                                         length: MemoryLayout<Float>.stride * packed.count,
+                                                         index: 5)
+                            }
+                        }
+                    }
                 }
 
                 if let mesh = pool.mesh(for: drawCall.meshType) {
@@ -1197,6 +1214,16 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     ) -> MTLRenderPipelineState? {
         if MaterialRegistry.shared.isBuiltin(material.id) {
             return MaterialRegistry.shared.pipelineState(for: material.id)
+        }
+
+        if let ref = material.shaderReference, ref.hasPrefix("builtin/") {
+            let builtinID: UUID
+            switch ref {
+            case "builtin/unlit": builtinID = MaterialRegistry.unlitMaterialID
+            case "builtin/toon":  builtinID = MaterialRegistry.toonMaterialID
+            default:              builtinID = MaterialRegistry.litMaterialID
+            }
+            return MaterialRegistry.shared.pipelineState(for: builtinID)
         }
 
         if let unified = material.unifiedShaderSource {

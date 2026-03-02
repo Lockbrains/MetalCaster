@@ -1,5 +1,8 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import MetalCasterCore
+import MetalCasterRenderer
+import MetalCasterAsset
 import MetalCasterScene
 
 struct ECSEntityBrowserView: View {
@@ -141,7 +144,13 @@ struct ECSEntityBrowserView: View {
         .frame(height: MCTheme.rowHeight)
         .background(selected ? MCTheme.surfaceSelected : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture { state.selectedEntity = entity }
+        .onTapGesture {
+            state.selectedAssetEntry = nil
+            state.selectedEntity = entity
+        }
+        .onDrop(of: [.plainText], isTargeted: nil) { providers in
+            handleMaterialDrop(providers, onto: entity, world: world)
+        }
         .contextMenu {
             Button("Duplicate") {
                 state.selectedEntity = entity
@@ -152,6 +161,24 @@ struct ECSEntityBrowserView: View {
                 state.deleteSelectedEntity()
             }
         }
+    }
+
+    private func handleMaterialDrop(_ providers: [NSItemProvider], onto entity: Entity, world: World) -> Bool {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: NSString.self) {
+                provider.loadObject(ofClass: NSString.self) { item, _ in
+                    guard let str = item as? NSString,
+                          let guid = UUID(uuidString: str as String),
+                          let url = state.assetDatabase.resolveURL(for: guid),
+                          url.pathExtension == "mcmat" else { return }
+                    DispatchQueue.main.async {
+                        state.assignMaterialAsset(from: url, to: entity)
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Logic

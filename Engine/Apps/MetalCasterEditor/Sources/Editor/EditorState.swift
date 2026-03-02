@@ -150,8 +150,15 @@ public final class EditorState {
     public var selectedAssetCategory: AssetCategory = .scenes
     public var assetBrowserSubfolder: String? = nil
     public var assetBrowserSearchQuery: String = ""
-    public var selectedAssetEntry: AssetEntry? = nil
+    public var selectedAssetEntry: AssetEntry? = nil {
+        didSet { loadSelectedMaterialAsset() }
+    }
     public var assetViewMode: AssetViewMode = .list
+
+    /// The material currently being edited as a standalone asset (not on an entity).
+    public var editingMaterialAsset: MCMaterial? = nil
+    /// The file URL of the material asset being edited.
+    public var editingMaterialAssetURL: URL? = nil
     /// Incremented to force SwiftUI to re-read asset entries from disk.
     public var assetBrowserRevision: Int = 0
 
@@ -832,24 +839,18 @@ public final class EditorState {
             return
         }
 
-        let builtinID: UUID
+        let shaderRef: String
         switch baseShader {
-        case "unlit": builtinID = MaterialRegistry.unlitMaterialID
-        case "toon":  builtinID = MaterialRegistry.toonMaterialID
-        default:      builtinID = MaterialRegistry.litMaterialID
+        case "unlit": shaderRef = "builtin/unlit"
+        case "toon":  shaderRef = "builtin/toon"
+        default:      shaderRef = "builtin/lit"
         }
-
-        guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
 
         let material = MCMaterial(
             name: sanitized,
             materialType: .custom,
-            renderState: builtin.renderState,
-            vertexShaderSource: builtin.vertexShaderSource,
-            fragmentShaderSource: builtin.fragmentShaderSource,
-            unifiedShaderSource: builtin.unifiedShaderSource,
-            dataFlowConfig: builtin.dataFlowConfig,
-            surfaceProperties: MCMaterialProperties()
+            surfaceProperties: MCMaterialProperties(),
+            shaderReference: shaderRef
         )
 
         do {
@@ -897,13 +898,45 @@ public final class EditorState {
         }
     }
 
+    private func loadSelectedMaterialAsset() {
+        guard let entry = selectedAssetEntry,
+              entry.fileExtension == "mcmat",
+              let url = assetDatabase.resolveURL(for: entry.guid) else {
+            editingMaterialAsset = nil
+            editingMaterialAssetURL = nil
+            return
+        }
+        do {
+            editingMaterialAsset = try MCMaterial.load(from: url)
+            editingMaterialAssetURL = url
+        } catch {
+            print("[MetalCaster] Failed to load material asset for editing: \(error)")
+            editingMaterialAsset = nil
+            editingMaterialAssetURL = nil
+        }
+    }
+
+    /// Saves the currently editing material asset back to disk.
+    public func saveEditingMaterialAsset() {
+        guard let mat = editingMaterialAsset, let url = editingMaterialAssetURL else { return }
+        do {
+            try mat.save(to: url)
+        } catch {
+            print("[MetalCaster] Failed to save material asset: \(error)")
+        }
+    }
+
     /// Loads a .mcmat file and assigns it to the selected entity.
     public func assignMaterialAsset(from url: URL) {
         guard let entity = selectedEntity else {
             print("[MetalCaster] No entity selected to assign material")
             return
         }
+        assignMaterialAsset(from: url, to: entity)
+    }
 
+    /// Loads a .mcmat file and assigns it to a specific entity.
+    public func assignMaterialAsset(from url: URL, to entity: Entity) {
         do {
             let material = try MCMaterial.load(from: url)
             if engine.world.hasComponent(MaterialComponent.self, on: entity) {
@@ -927,7 +960,23 @@ public final class EditorState {
 
         // Metal Caster — Custom Shader: \(name)
         //
-        // Vertex input from engine mesh pipeline.
+        // ========== Shader Parameters ==========
+        // Declare parameters with @param annotations.
+        // The engine parses these and generates Inspector UI automatically.
+        // Format: // @param <name> <type> <default...> [<min> <max>]
+        // Types:  float, float2, float3, float4, color3, color4
+        //
+        // @param brightness float 1.0 0.0 5.0
+        // @param tintColor color3 1.0 1.0 1.0
+        // @param waveSpeed float 1.0 0.0 10.0
+        // ========================================
+        //
+        // Access custom parameters via: customParams[0], customParams[1], ...
+        // They are packed in declaration order. For the above:
+        //   customParams[0] = brightness  (1 float)
+        //   customParams[1..3] = tintColor (3 floats)
+        //   customParams[4] = waveSpeed   (1 float)
+
         struct VertexIn {
             float3 position [[attribute(0)]];
             float3 normal   [[attribute(1)]];
@@ -978,18 +1027,25 @@ public final class EditorState {
 
         fragment float4 fragment_main(VertexOut in [[stage_in]],
                                       constant MaterialProperties &material [[buffer(2)]],
+                                      constant float *customParams [[buffer(5)]],
                                       texture2d<float> albedoTex [[texture(0)]]) {
             constexpr sampler texSampler(address::repeat, filter::linear);
 
-            float3 color = material.baseColor;
+            float brightness = customParams[0];
+            float3 tintColor = float3(customParams[1], customParams[2], customParams[3]);
+            float waveSpeed = customParams[4];
+
+            float3 color = material.baseColor * tintColor;
             if (material.hasAlbedoTexture != 0) {
                 color *= albedoTex.sample(texSampler, in.texCoord).rgb;
             }
 
-            // Simple hemisphere lighting
+            // Animated hemisphere lighting
             float3 N = normalize(in.normalWS);
+            float wave = sin(in.positionWS.x * 3.0 + in.positionWS.z * 3.0 + uniforms.time * waveSpeed) * 0.5 + 0.5;
             float NdotUp = dot(N, float3(0, 1, 0)) * 0.5 + 0.5;
-            color *= mix(0.3, 1.0, NdotUp);
+            color *= mix(0.3, 1.0, NdotUp) * brightness;
+            color = mix(color, color * (0.8 + 0.2 * wave), 0.3);
 
             color += material.emissiveColor * material.emissiveIntensity;
             return float4(color, 1.0);

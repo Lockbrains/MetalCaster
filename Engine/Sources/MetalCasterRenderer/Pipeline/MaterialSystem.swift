@@ -106,6 +106,13 @@ public struct MCMaterial: Codable, Sendable {
     /// PBR surface properties (base color, metallic, roughness, textures).
     public var surfaceProperties: MCMaterialProperties
 
+    /// Identifies which shader this material uses.
+    /// Built-in shaders: "builtin/lit", "builtin/unlit", "builtin/toon".
+    /// Project shaders: relative path e.g. "Shaders/MyShader.metal".
+    /// When set, the engine resolves the actual shader source from this reference
+    /// rather than from `unifiedShaderSource` / `fragmentShaderSource` directly.
+    public var shaderReference: String?
+
     public init(
         id: UUID = UUID(),
         name: String = "Default Material",
@@ -117,7 +124,8 @@ public struct MCMaterial: Codable, Sendable {
         postProcessSources: [String] = [],
         parameters: [String: [Float]] = [:],
         dataFlowConfig: DataFlowConfig = DataFlowConfig(),
-        surfaceProperties: MCMaterialProperties = MCMaterialProperties()
+        surfaceProperties: MCMaterialProperties = MCMaterialProperties(),
+        shaderReference: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -130,6 +138,7 @@ public struct MCMaterial: Codable, Sendable {
         self.parameters = parameters
         self.dataFlowConfig = dataFlowConfig
         self.surfaceProperties = surfaceProperties
+        self.shaderReference = shaderReference
     }
 
     // Custom Codable to maintain backward compatibility with scenes saved before
@@ -139,6 +148,7 @@ public struct MCMaterial: Codable, Sendable {
         case id, name, materialType, renderState
         case vertexShaderSource, fragmentShaderSource, unifiedShaderSource
         case postProcessSources, parameters, dataFlowConfig, surfaceProperties
+        case shaderReference
     }
 
     public init(from decoder: Decoder) throws {
@@ -154,10 +164,19 @@ public struct MCMaterial: Codable, Sendable {
         parameters = try c.decodeIfPresent([String: [Float]].self, forKey: .parameters) ?? [:]
         dataFlowConfig = try c.decodeIfPresent(DataFlowConfig.self, forKey: .dataFlowConfig) ?? DataFlowConfig()
         surfaceProperties = try c.decodeIfPresent(MCMaterialProperties.self, forKey: .surfaceProperties) ?? MCMaterialProperties()
+        shaderReference = try c.decodeIfPresent(String.self, forKey: .shaderReference)
     }
 
     /// Whether this material uses light data (buffer index 3/4).
     public var needsLighting: Bool {
+        if let ref = shaderReference {
+            switch ref {
+            case "builtin/lit", "builtin/toon": return true
+            case "builtin/unlit": return false
+            default: break
+            }
+        }
+
         switch name {
         case "MC_Lit", "MC_Toon": return true
         default:
@@ -272,4 +291,110 @@ extension MCMaterial {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+// MARK: - Shader Parameter Annotations
+
+/// A parameter exposed by a shader via `// @param` annotations.
+/// Format: `// @param <name> <type> <default> [<min> <max>]`
+///
+/// Supported types: `float`, `float2`, `float3`, `float4`, `color3`, `color4`
+///
+/// Example:
+/// ```
+/// // @param brightness float 1.0 0.0 5.0
+/// // @param tintColor color3 1.0 0.5 0.2
+/// // @param offset float2 0.0 0.0
+/// ```
+public struct ShaderParameter: Codable, Sendable, Identifiable, Equatable {
+    public var id: String { name }
+    public let name: String
+    public let type: ParamType
+    public var defaultValue: [Float]
+    public var minValue: Float?
+    public var maxValue: Float?
+
+    public enum ParamType: String, Codable, Sendable {
+        case float, float2, float3, float4, color3, color4
+
+        public var componentCount: Int {
+            switch self {
+            case .float:  return 1
+            case .float2: return 2
+            case .float3, .color3: return 3
+            case .float4, .color4: return 4
+            }
+        }
+
+        public var isColor: Bool {
+            self == .color3 || self == .color4
+        }
+    }
+}
+
+/// Parses `// @param` annotations from MSL shader source.
+public struct ShaderParameterParser {
+
+    public static func parse(source: String) -> [ShaderParameter] {
+        var params: [ShaderParameter] = []
+
+        for line in source.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("// @param ") else { continue }
+
+            let tokens = trimmed.dropFirst("// @param ".count)
+                .split(separator: " ", omittingEmptySubsequences: true)
+                .map(String.init)
+            guard tokens.count >= 2 else { continue }
+
+            let name = tokens[0]
+            guard let type = ShaderParameter.ParamType(rawValue: tokens[1]) else { continue }
+
+            let componentCount = type.componentCount
+            var defaultValue = [Float](repeating: 0, count: componentCount)
+            var minVal: Float? = nil
+            var maxVal: Float? = nil
+
+            let remaining = Array(tokens.dropFirst(2))
+
+            for i in 0..<min(componentCount, remaining.count) {
+                if let f = Float(remaining[i]) {
+                    defaultValue[i] = f
+                }
+            }
+
+            let afterDefault = remaining.dropFirst(componentCount)
+            if afterDefault.count >= 2 {
+                minVal = Float(afterDefault[afterDefault.startIndex])
+                maxVal = Float(afterDefault[afterDefault.startIndex + 1])
+            }
+
+            params.append(ShaderParameter(
+                name: name,
+                type: type,
+                defaultValue: defaultValue,
+                minValue: minVal,
+                maxValue: maxVal
+            ))
+        }
+
+        return params
+    }
+
+    /// Packs material parameter values into a flat float array for GPU binding.
+    /// Parameters are packed in declaration order from the shader.
+    public static func packParameters(
+        params: [ShaderParameter],
+        values: [String: [Float]]
+    ) -> [Float] {
+        var packed: [Float] = []
+        for param in params {
+            let val = values[param.name] ?? param.defaultValue
+            let count = param.type.componentCount
+            for i in 0..<count {
+                packed.append(i < val.count ? val[i] : 0)
+            }
+        }
+        return packed
+    }
 }

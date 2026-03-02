@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
+import MetalCasterAsset
 
 #if canImport(AppKit)
 import AppKit
@@ -16,48 +17,313 @@ struct InspectorView: View {
     var body: some View {
         let _ = state.worldRevision
         if let entity = state.selectedEntity, state.engine.world.isAlive(entity) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if state.engine.world.hasComponent(NameComponent.self, on: entity) {
-                        nameSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(TransformComponent.self, on: entity) {
-                        transformSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(CameraComponent.self, on: entity) {
-                        cameraSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(LightComponent.self, on: entity) {
-                        lightSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(MeshComponent.self, on: entity) {
-                        meshSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(MaterialComponent.self, on: entity) {
-                        materialSection(entity)
-                        sectionDivider()
-                    }
-                    if state.engine.world.hasComponent(SkyboxComponent.self, on: entity) {
-                        skyboxSection(entity)
-                        sectionDivider()
-                    }
-                    addComponentSection(entity)
-                }
-                .padding(MCTheme.panelPadding)
-            }
-            .background(MCTheme.background)
+            entityInspector(entity)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.fileExtension == "mcmat" {
+            materialAssetInspector(entry: assetEntry)
         } else {
             ZStack {
                 MCTheme.background
-                Text("Select an entity")
+                Text("Select an entity or asset")
                     .font(MCTheme.fontBody)
                     .foregroundStyle(MCTheme.textTertiary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func entityInspector(_ entity: Entity) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if state.engine.world.hasComponent(NameComponent.self, on: entity) {
+                    nameSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(TransformComponent.self, on: entity) {
+                    transformSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(CameraComponent.self, on: entity) {
+                    cameraSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(LightComponent.self, on: entity) {
+                    lightSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(MeshComponent.self, on: entity) {
+                    meshSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(MaterialComponent.self, on: entity) {
+                    materialSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(SkyboxComponent.self, on: entity) {
+                    skyboxSection(entity)
+                    sectionDivider()
+                }
+                addComponentSection(entity)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    // MARK: - Material Asset Inspector
+
+    @ViewBuilder
+    private func materialAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if let mat = state.editingMaterialAsset {
+                    assetMaterialHeader(entry: entry, mat: mat)
+                    sectionDivider()
+                    assetMaterialShaderSection(mat: mat)
+                    sectionDivider()
+                    assetMaterialSurfaceSection(mat: mat)
+                    sectionDivider()
+                    assetMaterialTextureSection(mat: mat)
+
+                    let shaderParams = parseShaderParamsFromSource(mat: mat)
+                    if !shaderParams.isEmpty {
+                        sectionDivider()
+                        assetMaterialShaderParamsSection(mat: mat, params: shaderParams)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Spacer()
+                        ProgressView()
+                        Text("Loading material...")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func assetMaterialHeader(entry: AssetEntry, mat: MCMaterial) -> some View {
+        MCSection(title: "Material Asset") {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Name", text: Binding(
+                    get: { state.editingMaterialAsset?.name ?? "" },
+                    set: { newName in
+                        state.editingMaterialAsset?.name = newName
+                        state.saveEditingMaterialAsset()
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .mcInputStyle()
+
+                HStack {
+                    Text("File")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 50, alignment: .leading)
+                    Text("\(entry.name).\(entry.fileExtension)")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assetMaterialShaderSection(mat: MCMaterial) -> some View {
+        MCSection(title: "Shader") {
+            ShaderPicker(
+                currentShaderName: resolveShaderDisplayName(for: mat),
+                onSelect: { selection in
+                    applyShaderToAsset(selection)
+                },
+                assetDatabase: state.assetDatabase
+            )
+        }
+    }
+
+    private func applyShaderToAsset(_ selection: ShaderSelection) {
+        let preserved = state.editingMaterialAsset?.surfaceProperties ?? MCMaterialProperties()
+        let preservedParams = state.editingMaterialAsset?.parameters ?? [:]
+        let preservedName = state.editingMaterialAsset?.name ?? "Material"
+        let preservedID = state.editingMaterialAsset?.id ?? UUID()
+
+        switch selection {
+        case .builtin(let tag):
+            let shaderRef: String
+            switch tag {
+            case "unlit": shaderRef = "builtin/unlit"
+            case "toon":  shaderRef = "builtin/toon"
+            default:      shaderRef = "builtin/lit"
+            }
+            state.editingMaterialAsset = MCMaterial(
+                id: preservedID,
+                name: preservedName,
+                materialType: .custom,
+                surfaceProperties: preserved,
+                shaderReference: shaderRef
+            )
+        case .projectAsset(let entry):
+            guard let url = state.assetDatabase.resolveURL(for: entry.guid),
+                  let source = try? String(contentsOf: url, encoding: .utf8) else { return }
+            state.editingMaterialAsset = MCMaterial(
+                id: preservedID,
+                name: preservedName,
+                materialType: .custom,
+                unifiedShaderSource: source,
+                surfaceProperties: preserved,
+                shaderReference: entry.relativePath
+            )
+        }
+        state.editingMaterialAsset?.parameters = preservedParams
+        state.saveEditingMaterialAsset()
+    }
+
+    @ViewBuilder
+    private func assetMaterialSurfaceSection(mat: MCMaterial) -> some View {
+        let tag = materialShaderTag(for: mat)
+
+        MCSection(title: "Surface") {
+            VStack(alignment: .leading, spacing: 8) {
+                assetColorRow(label: "Base Color",
+                    get: { state.editingMaterialAsset?.surfaceProperties.baseColor ?? SIMD3<Float>(0.8, 0.8, 0.8) },
+                    set: { state.editingMaterialAsset?.surfaceProperties.baseColor = $0; state.saveEditingMaterialAsset() })
+
+                if tag == "lit" {
+                    assetSlider(label: "Metallic", range: 0...1,
+                        get: { state.editingMaterialAsset?.surfaceProperties.metallic ?? 0 },
+                        set: { state.editingMaterialAsset?.surfaceProperties.metallic = $0; state.saveEditingMaterialAsset() })
+
+                    assetSlider(label: "Roughness", range: 0.04...1,
+                        get: { state.editingMaterialAsset?.surfaceProperties.roughness ?? 0.5 },
+                        set: { state.editingMaterialAsset?.surfaceProperties.roughness = $0; state.saveEditingMaterialAsset() })
+                }
+
+                assetColorRow(label: "Emissive",
+                    get: { state.editingMaterialAsset?.surfaceProperties.emissiveColor ?? .zero },
+                    set: { state.editingMaterialAsset?.surfaceProperties.emissiveColor = $0; state.saveEditingMaterialAsset() })
+
+                assetSlider(label: "Emissive Int.", range: 0...10,
+                    get: { state.editingMaterialAsset?.surfaceProperties.emissiveIntensity ?? 0 },
+                    set: { state.editingMaterialAsset?.surfaceProperties.emissiveIntensity = $0; state.saveEditingMaterialAsset() })
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assetMaterialTextureSection(mat: MCMaterial) -> some View {
+        let tag = materialShaderTag(for: mat)
+
+        MCSection(title: "Textures") {
+            VStack(alignment: .leading, spacing: 8) {
+                materialTextureRow(label: "Albedo Map", entity: Entity(id: 0),
+                    get: { state.editingMaterialAsset?.surfaceProperties.albedoTexturePath },
+                    set: { state.editingMaterialAsset?.surfaceProperties.albedoTexturePath = $0; state.saveEditingMaterialAsset() })
+
+                if tag == "lit" {
+                    materialTextureRow(label: "Normal Map", entity: Entity(id: 0),
+                        get: { state.editingMaterialAsset?.surfaceProperties.normalMapPath },
+                        set: { state.editingMaterialAsset?.surfaceProperties.normalMapPath = $0; state.saveEditingMaterialAsset() })
+
+                    materialTextureRow(label: "Metallic/Roughness", entity: Entity(id: 0),
+                        get: { state.editingMaterialAsset?.surfaceProperties.metallicRoughnessMapPath },
+                        set: { state.editingMaterialAsset?.surfaceProperties.metallicRoughnessMapPath = $0; state.saveEditingMaterialAsset() })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assetMaterialShaderParamsSection(mat: MCMaterial, params: [ShaderParameter]) -> some View {
+        MCSection(title: "Shader Parameters") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(params) { param in
+                    assetShaderParamRow(param: param)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assetShaderParamRow(param: ShaderParameter) -> some View {
+        let values = state.editingMaterialAsset?.parameters[param.name] ?? param.defaultValue
+
+        switch param.type {
+        case .float:
+            assetSlider(label: param.name, range: (param.minValue ?? 0)...(param.maxValue ?? 10),
+                get: { values.first ?? param.defaultValue.first ?? 0 },
+                set: { state.editingMaterialAsset?.parameters[param.name] = [$0]; state.saveEditingMaterialAsset() })
+        case .color3, .color4:
+            assetColorRow(label: param.name,
+                get: { SIMD3<Float>(values.count > 0 ? values[0] : 1, values.count > 1 ? values[1] : 1, values.count > 2 ? values[2] : 1) },
+                set: {
+                    state.editingMaterialAsset?.parameters[param.name] = param.type == .color4 ? [$0.x, $0.y, $0.z, 1] : [$0.x, $0.y, $0.z]
+                    state.saveEditingMaterialAsset()
+                })
+        default:
+            EmptyView()
+        }
+    }
+
+    private func parseShaderParamsFromSource(mat: MCMaterial) -> [ShaderParameter] {
+        let source: String?
+        if let unified = mat.unifiedShaderSource {
+            source = unified
+        } else if !mat.fragmentShaderSource.isEmpty {
+            source = mat.fragmentShaderSource
+        } else {
+            source = nil
+        }
+        guard let src = source else { return [] }
+        return ShaderParameterParser.parse(source: src)
+    }
+
+    // Asset-editing slider/color helpers (not bound to entity)
+
+    @ViewBuilder
+    private func assetSlider(label: String, range: ClosedRange<Float>,
+                             get: @escaping () -> Float,
+                             set: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            Slider(value: Binding(get: get, set: set), in: range)
+            Text(String(format: "%.2f", get()))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func assetColorRow(label: String,
+                               get: @escaping () -> SIMD3<Float>,
+                               set: @escaping (SIMD3<Float>) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            ColorPicker("", selection: Binding(
+                get: {
+                    let c = get()
+                    return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                },
+                set: { newColor in
+                    if let components = newColor.cgColor?.components, components.count >= 3 {
+                        set(SIMD3<Float>(Float(components[0]), Float(components[1]), Float(components[2])))
+                    }
+                }
+            ), supportsOpacity: false)
+            .labelsHidden()
         }
     }
 
@@ -586,51 +852,14 @@ struct InspectorView: View {
                     }
                 }
 
-                // Shader selector
-                HStack(spacing: 8) {
-                    Picker("Shader", selection: Binding(
-                        get: { materialShaderTag(for: mat) },
-                        set: { tag in
-                            if tag == "custom" { return }
-                            switchShader(on: entity, to: tag)
-                        }
-                    )) {
-                        Text("Lit").tag("lit")
-                        Text("Unlit").tag("unlit")
-                        Text("Toon").tag("toon")
-                        if materialShaderTag(for: mat) == "custom" {
-                            Text("Custom").tag("custom")
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    Menu {
-                        let shaderEntries = state.assetDatabase.entries(in: .shaders, subfolder: nil)
-                            .filter { $0.fileExtension == "metal" }
-                        if shaderEntries.isEmpty {
-                            Text("No shaders in project")
-                        } else {
-                            ForEach(shaderEntries) { entry in
-                                Button(entry.name) {
-                                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
-                                        loadCustomShader(on: entity, from: url)
-                                    }
-                                }
-                            }
-                        }
-                        Divider()
-                        Button("Load from File...") {
-                            pickShaderFile(entity: entity)
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 11))
-                            .foregroundStyle(MCTheme.textTertiary)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .help("Load Custom Shader")
-                }
+                // Shader selector (Unity-style dropdown with full path)
+                ShaderPicker(
+                    currentShaderName: resolveShaderDisplayName(for: mat),
+                    onSelect: { selection in
+                        applyShaderSelection(selection, on: entity)
+                    },
+                    assetDatabase: state.assetDatabase
+                )
 
                 sectionDivider()
 
@@ -708,6 +937,21 @@ struct InspectorView: View {
                         })
                 }
 
+                // Custom shader parameters (parsed from @param annotations)
+                if let shaderParams = parseShaderParams(from: mat),
+                   !shaderParams.isEmpty {
+                    sectionDivider()
+
+                    Text("Shader Parameters")
+                        .font(MCTheme.fontCaption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(MCTheme.textSecondary)
+
+                    ForEach(shaderParams) { param in
+                        shaderParameterRow(param: param, entity: entity, mat: mat)
+                    }
+                }
+
                 sectionDivider()
 
                 // Render state info
@@ -724,52 +968,209 @@ struct InspectorView: View {
         }
     }
 
+    private func parseShaderParams(from mat: MCMaterial?) -> [ShaderParameter]? {
+        let source: String?
+        if let unified = mat?.unifiedShaderSource {
+            source = unified
+        } else if let frag = mat?.fragmentShaderSource, !frag.isEmpty {
+            source = frag
+        } else {
+            source = nil
+        }
+        guard let src = source else { return nil }
+        return ShaderParameterParser.parse(source: src)
+    }
+
+    @ViewBuilder
+    private func shaderParameterRow(param: ShaderParameter, entity: Entity, mat: MCMaterial?) -> some View {
+        let values = mat?.parameters[param.name] ?? param.defaultValue
+
+        switch param.type {
+        case .float:
+            materialSlider(
+                label: param.name, entity: entity,
+                range: (param.minValue ?? 0)...(param.maxValue ?? 10),
+                get: { values.first ?? param.defaultValue.first ?? 0 },
+                set: { val in
+                    state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                        mc.material.parameters[param.name] = [val]
+                    }
+                })
+
+        case .float2:
+            liveVec3Row(label: param.name, entity: entity,
+                get: {
+                    let v = mat?.parameters[param.name] ?? param.defaultValue
+                    return SIMD3<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0, 0)
+                },
+                set: { newVal in
+                    state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                        mc.material.parameters[param.name] = [newVal.x, newVal.y]
+                    }
+                })
+
+        case .color3, .color4:
+            materialColorRow(label: param.name, entity: entity,
+                get: {
+                    let v = mat?.parameters[param.name] ?? param.defaultValue
+                    return SIMD3<Float>(v.count > 0 ? v[0] : 1, v.count > 1 ? v[1] : 1, v.count > 2 ? v[2] : 1)
+                },
+                set: { color in
+                    state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                        if param.type == .color4 {
+                            mc.material.parameters[param.name] = [color.x, color.y, color.z, 1.0]
+                        } else {
+                            mc.material.parameters[param.name] = [color.x, color.y, color.z]
+                        }
+                    }
+                })
+
+        case .float3:
+            liveVec3Row(label: param.name, entity: entity,
+                get: {
+                    let v = mat?.parameters[param.name] ?? param.defaultValue
+                    return SIMD3<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0, v.count > 2 ? v[2] : 0)
+                },
+                set: { newVal in
+                    state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                        mc.material.parameters[param.name] = [newVal.x, newVal.y, newVal.z]
+                    }
+                })
+
+        case .float4:
+            liveVec3Row(label: "\(param.name) (xyz)", entity: entity,
+                get: {
+                    let v = mat?.parameters[param.name] ?? param.defaultValue
+                    return SIMD3<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0, v.count > 2 ? v[2] : 0)
+                },
+                set: { newVal in
+                    state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                        var v = mc.material.parameters[param.name] ?? param.defaultValue
+                        while v.count < 4 { v.append(0) }
+                        v[0] = newVal.x; v[1] = newVal.y; v[2] = newVal.z
+                        mc.material.parameters[param.name] = v
+                    }
+                })
+        }
+    }
+
     // MARK: - Material Helpers
+
+    private func resolveShaderDisplayName(for mat: MCMaterial?) -> String {
+        guard let mat else { return "Built-in/Lit" }
+
+        if let ref = mat.shaderReference, !ref.isEmpty {
+            switch ref {
+            case "builtin/lit":   return "Built-in/Lit"
+            case "builtin/unlit": return "Built-in/Unlit"
+            case "builtin/toon":  return "Built-in/Toon"
+            default:
+                let filename = URL(fileURLWithPath: ref).deletingPathExtension().lastPathComponent
+                return "Custom/\(filename)"
+            }
+        }
+
+        if MaterialRegistry.shared.isBuiltin(mat.id) {
+            if mat.id == MaterialRegistry.unlitMaterialID { return "Built-in/Unlit" }
+            if mat.id == MaterialRegistry.toonMaterialID { return "Built-in/Toon" }
+            return "Built-in/Lit"
+        }
+
+        if mat.unifiedShaderSource != nil || !mat.fragmentShaderSource.isEmpty {
+            return "Custom Shader"
+        }
+
+        return "Built-in/Lit"
+    }
+
+    private func applyShaderSelection(_ selection: ShaderSelection, on entity: Entity) {
+        switch selection {
+        case .builtin(let tag):
+            switchShader(on: entity, to: tag)
+        case .projectAsset(let entry):
+            guard let url = state.assetDatabase.resolveURL(for: entry.guid),
+                  let source = try? String(contentsOf: url, encoding: .utf8) else { return }
+            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                let preserved = mc.material.surfaceProperties
+                let preservedParams = mc.material.parameters
+                let preservedName = mc.material.name
+                mc.material = MCMaterial(
+                    name: preservedName,
+                    materialType: .custom,
+                    unifiedShaderSource: source,
+                    surfaceProperties: preserved,
+                    shaderReference: entry.relativePath
+                )
+                mc.material.parameters = preservedParams
+            }
+        }
+    }
+
+    private func shaderDisplayPath(for entry: AssetEntry) -> String {
+        let rel = entry.relativePath
+        // Strip "Shaders/" prefix and ".metal" extension
+        var path = rel
+        if path.hasPrefix("Shaders/") {
+            path = String(path.dropFirst("Shaders/".count))
+        }
+        if path.hasSuffix(".metal") {
+            path = String(path.dropLast(".metal".count))
+        }
+        return path
+    }
 
     private func materialShaderTag(for mat: MCMaterial?) -> String {
         guard let mat else { return "lit" }
+
+        if let ref = mat.shaderReference, !ref.isEmpty {
+            switch ref {
+            case "builtin/lit":   return "lit"
+            case "builtin/unlit": return "unlit"
+            case "builtin/toon":  return "toon"
+            default:              return "custom"
+            }
+        }
+
         if MaterialRegistry.shared.isBuiltin(mat.id) {
             if mat.id == MaterialRegistry.unlitMaterialID { return "unlit" }
             if mat.id == MaterialRegistry.toonMaterialID { return "toon" }
             return "lit"
         }
-        // Custom material: check name hints
-        let name = mat.name.lowercased()
-        if name.contains("unlit") { return "unlit" }
-        if name.contains("toon") { return "toon" }
-        if name.contains("lit") && !name.contains("unlit") { return "lit" }
-        // If it has a unified source that doesn't match builtins, it's custom
-        if mat.unifiedShaderSource != nil { return "custom" }
+
+        if mat.unifiedShaderSource != nil || !mat.fragmentShaderSource.isEmpty { return "custom" }
         return "lit"
     }
 
     private func switchShader(on entity: Entity, to tag: String) {
         let builtinID: UUID
+        let shaderRef: String
         switch tag {
-        case "unlit": builtinID = MaterialRegistry.unlitMaterialID
-        case "toon":  builtinID = MaterialRegistry.toonMaterialID
-        default:      builtinID = MaterialRegistry.litMaterialID
+        case "unlit": builtinID = MaterialRegistry.unlitMaterialID; shaderRef = "builtin/unlit"
+        case "toon":  builtinID = MaterialRegistry.toonMaterialID;  shaderRef = "builtin/toon"
+        default:      builtinID = MaterialRegistry.litMaterialID;   shaderRef = "builtin/lit"
         }
         guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
         state.updateComponent(MaterialComponent.self, on: entity) { mc in
             let preserved = mc.material.surfaceProperties
+            let preservedName = mc.material.name
             mc.material = builtin
             mc.material.surfaceProperties = preserved
+            mc.material.shaderReference = shaderRef
+            mc.material.name = preservedName
         }
     }
 
     private func createMaterial(on entity: Entity, basedOn builtinID: UUID, name: String) {
-        guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
+        let shaderRef: String
+        if builtinID == MaterialRegistry.unlitMaterialID { shaderRef = "builtin/unlit" }
+        else if builtinID == MaterialRegistry.toonMaterialID { shaderRef = "builtin/toon" }
+        else { shaderRef = "builtin/lit" }
+
         let custom = MCMaterial(
             name: name,
             materialType: .custom,
-            renderState: builtin.renderState,
-            vertexShaderSource: builtin.vertexShaderSource,
-            fragmentShaderSource: builtin.fragmentShaderSource,
-            unifiedShaderSource: builtin.unifiedShaderSource,
-            postProcessSources: builtin.postProcessSources,
-            dataFlowConfig: builtin.dataFlowConfig,
-            surfaceProperties: MCMaterialProperties()
+            surfaceProperties: MCMaterialProperties(),
+            shaderReference: shaderRef
         )
         state.updateComponent(MaterialComponent.self, on: entity) { mc in
             mc.material = custom
@@ -824,13 +1225,19 @@ struct InspectorView: View {
     private func materialTextureRow(label: String, entity: Entity,
                                     get: @escaping () -> String?,
                                     set: @escaping (String?) -> Void) -> some View {
+        let currentPath = get()
+        let displayName: String = {
+            guard let p = currentPath else { return "None" }
+            return URL(fileURLWithPath: p).lastPathComponent
+        }()
+
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
                     .font(MCTheme.fontCaption)
                     .foregroundStyle(MCTheme.textSecondary)
                 Spacer()
-                if get() != nil {
+                if currentPath != nil {
                     Button {
                         set(nil)
                     } label: {
@@ -841,21 +1248,51 @@ struct InspectorView: View {
                     .buttonStyle(.plain)
                 }
             }
-            Button {
-                pickTextureFile { url in
-                    set(url?.path)
+
+            Menu {
+                let texEntries = state.assetDatabase.entries(in: .textures, subfolder: nil)
+                    .filter { !$0.isDirectory }
+
+                if texEntries.isEmpty {
+                    Text("No textures in project")
+                } else {
+                    ForEach(texEntries) { entry in
+                        Button {
+                            if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                                set(url.path)
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "photo")
+                                Text("\(entry.name).\(entry.fileExtension)")
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button("Import Texture...") {
+                    importTextureToProject { relativePath in
+                        if let path = relativePath {
+                            set(path)
+                        }
+                    }
                 }
             } label: {
                 HStack {
-                    Image(systemName: get() != nil ? "photo.fill" : "photo")
+                    Image(systemName: currentPath != nil ? "photo.fill" : "photo")
                         .font(.system(size: 10))
-                        .foregroundStyle(get() != nil ? MCTheme.statusGreen : MCTheme.textTertiary)
-                    Text(get().map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                        .foregroundStyle(currentPath != nil ? MCTheme.statusGreen : MCTheme.textTertiary)
+                    Text(displayName)
                         .font(MCTheme.fontCaption)
                         .foregroundStyle(MCTheme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundStyle(MCTheme.textTertiary)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
@@ -866,11 +1303,11 @@ struct InspectorView: View {
                         .stroke(MCTheme.inputBorder, lineWidth: 1)
                 )
             }
-            .buttonStyle(.plain)
+            .menuStyle(.borderlessButton)
         }
     }
 
-    private func pickTextureFile(completion: @escaping (URL?) -> Void) {
+    private func importTextureToProject(completion: @escaping (String?) -> Void) {
         #if canImport(AppKit)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [
@@ -881,10 +1318,25 @@ struct InspectorView: View {
         ]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Select a texture file"
+        panel.message = "Select a texture to import into the project"
         panel.begin { response in
             DispatchQueue.main.async {
-                completion(response == .OK ? panel.url : nil)
+                guard response == .OK, let url = panel.url else {
+                    completion(nil)
+                    return
+                }
+                do {
+                    let entry = try state.assetDatabase.importAsset(from: url, toCategory: .textures)
+                    if let resolvedURL = state.assetDatabase.resolveURL(for: entry.guid) {
+                        state.refreshAssetBrowser()
+                        completion(resolvedURL.path)
+                    } else {
+                        completion(nil)
+                    }
+                } catch {
+                    print("[MetalCaster] Failed to import texture: \(error)")
+                    completion(nil)
+                }
             }
         }
         #endif
@@ -912,27 +1364,27 @@ struct InspectorView: View {
             print("[MetalCaster] Failed to read shader file: \(url.path)")
             return
         }
-        state.updateComponent(MaterialComponent.self, on: entity) { mc in
-            mc.material.materialType = .custom
-            mc.material.unifiedShaderSource = source
-        }
-    }
-
-    private func pickShaderFile(entity: Entity) {
-        #if canImport(AppKit)
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "metal")!]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Select a shader file (.metal)"
-        panel.begin { response in
-            DispatchQueue.main.async {
-                if response == .OK, let url = panel.url {
-                    loadCustomShader(on: entity, from: url)
-                }
+        let relativePath: String? = {
+            guard let root = state.projectManager.projectRoot else { return nil }
+            let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            if url.path.hasPrefix(rootPath) {
+                return String(url.path.dropFirst(rootPath.count))
             }
+            return nil
+        }()
+        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+            let preserved = mc.material.surfaceProperties
+            let preservedParams = mc.material.parameters
+            let preservedName = mc.material.name
+            mc.material = MCMaterial(
+                name: preservedName,
+                materialType: .custom,
+                unifiedShaderSource: source,
+                surfaceProperties: preserved,
+                shaderReference: relativePath
+            )
+            mc.material.parameters = preservedParams
         }
-        #endif
     }
 
     private func saveMaterialToProject(mat: MCMaterial?) {
@@ -1147,6 +1599,194 @@ extension MCSection where Trailing == EmptyView {
         self.title = title
         self.trailing = { EmptyView() }
         self.content = content
+    }
+}
+
+// MARK: - Shader Selection
+
+enum ShaderSelection {
+    case builtin(String)
+    case projectAsset(AssetEntry)
+}
+
+/// Unity-style shader picker: shows current shader path, click to open searchable list.
+struct ShaderPicker: View {
+    let currentShaderName: String
+    let onSelect: (ShaderSelection) -> Void
+    let assetDatabase: AssetDatabase
+
+    @State private var showPopover = false
+    @State private var searchText = ""
+
+    private var builtinShaders: [(name: String, path: String, tag: String)] {
+        [
+            ("Lit",   "Built-in/Lit",   "lit"),
+            ("Unlit", "Built-in/Unlit", "unlit"),
+            ("Toon",  "Built-in/Toon",  "toon"),
+        ]
+    }
+
+    private var projectShaders: [AssetEntry] {
+        let _ = 0  // Force re-evaluation
+        return assetDatabase.allEntries(in: .shaders)
+            .filter { $0.fileExtension == "metal" }
+    }
+
+    private func shaderPath(for entry: AssetEntry) -> String {
+        var path = entry.relativePath
+        if path.hasPrefix("Shaders/") { path = String(path.dropFirst("Shaders/".count)) }
+        if path.hasSuffix(".metal") { path = String(path.dropLast(".metal".count)) }
+        return path
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Shader")
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+            Button {
+                showPopover.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "function")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MCTheme.textTertiary)
+                    Text(currentShaderName)
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8))
+                        .foregroundStyle(MCTheme.textTertiary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(MCTheme.inputBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(MCTheme.inputBorder, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+                shaderListPopover
+            }
+        }
+    }
+
+    private var shaderListPopover: some View {
+        VStack(spacing: 0) {
+            // Search bar
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 10))
+                    .foregroundStyle(MCTheme.textTertiary)
+                TextField("Search shaders...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Built-in section
+                    let filteredBuiltins = builtinShaders.filter {
+                        searchText.isEmpty || $0.path.localizedCaseInsensitiveContains(searchText)
+                    }
+                    if !filteredBuiltins.isEmpty {
+                        sectionHeader("Built-in")
+                        ForEach(filteredBuiltins, id: \.tag) { shader in
+                            shaderRow(
+                                path: shader.path,
+                                isSelected: currentShaderName == shader.path
+                            ) {
+                                onSelect(.builtin(shader.tag))
+                                showPopover = false
+                            }
+                        }
+                    }
+
+                    // Project shaders
+                    let filteredProject = projectShaders.filter {
+                        searchText.isEmpty || shaderPath(for: $0).localizedCaseInsensitiveContains(searchText)
+                    }
+                    if !filteredProject.isEmpty {
+                        sectionHeader("Project")
+                        ForEach(filteredProject) { entry in
+                            let path = shaderPath(for: entry)
+                            shaderRow(
+                                path: path,
+                                isSelected: currentShaderName == path
+                            ) {
+                                onSelect(.projectAsset(entry))
+                                showPopover = false
+                            }
+                        }
+                    }
+
+                    if filteredBuiltins.isEmpty && filteredProject.isEmpty {
+                        Text("No matching shaders")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 260)
+        }
+        .frame(width: 240)
+        .background(MCTheme.background)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(MCTheme.fontSmall)
+            .fontWeight(.semibold)
+            .foregroundStyle(MCTheme.textTertiary)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+    }
+
+    private func shaderRow(path: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "function")
+                    .font(.system(size: 10))
+                    .foregroundStyle(isSelected ? MCTheme.statusBlue : MCTheme.textTertiary)
+                    .frame(width: 14)
+                Text(path)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(isSelected ? MCTheme.textPrimary : MCTheme.textSecondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
