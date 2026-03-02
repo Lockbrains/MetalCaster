@@ -26,9 +26,30 @@ public enum ShaderCategory: String, CaseIterable, Identifiable, Codable, Sendabl
 public enum MeshType: Equatable, Codable, Sendable {
     case sphere
     case cube
+    case plane
+    case cylinder
+    case cone
+    case capsule
     case custom(URL)
     /// References a mesh asset by its project GUID, resolved at load time via AssetDatabase.
     case asset(UUID)
+
+    /// All built-in primitive types available in the editor.
+    public static let builtinPrimitives: [MeshType] = [.cube, .sphere, .plane, .cylinder, .cone, .capsule]
+
+    /// Human-readable display name.
+    public var displayName: String {
+        switch self {
+        case .sphere: return "Sphere"
+        case .cube: return "Cube"
+        case .plane: return "Plane"
+        case .cylinder: return "Cylinder"
+        case .cone: return "Cone"
+        case .capsule: return "Capsule"
+        case .custom: return "Custom Mesh"
+        case .asset: return "Asset Mesh"
+        }
+    }
 
     private enum CodingKeys: String, CodingKey {
         case type, path, guid
@@ -41,6 +62,14 @@ public enum MeshType: Equatable, Codable, Sendable {
             try container.encode("sphere", forKey: .type)
         case .cube:
             try container.encode("cube", forKey: .type)
+        case .plane:
+            try container.encode("plane", forKey: .type)
+        case .cylinder:
+            try container.encode("cylinder", forKey: .type)
+        case .cone:
+            try container.encode("cone", forKey: .type)
+        case .capsule:
+            try container.encode("capsule", forKey: .type)
         case .custom(let url):
             try container.encode("custom", forKey: .type)
             try container.encode(url.path, forKey: .path)
@@ -54,8 +83,11 @@ public enum MeshType: Equatable, Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
-        case "cube":
-            self = .cube
+        case "cube": self = .cube
+        case "plane": self = .plane
+        case "cylinder": self = .cylinder
+        case "cone": self = .cone
+        case "capsule": self = .capsule
         case "custom":
             let path = try container.decode(String.self, forKey: .path)
             let url = URL(fileURLWithPath: path)
@@ -192,6 +224,77 @@ public struct Uniforms: Sendable {
         self.normalMatrix = normalMatrix
         self.cameraPosition = cameraPosition
         self.time = time
+    }
+}
+
+// MARK: - Post-Process Uniforms (CPU ↔ GPU)
+
+/// Uniform buffer for post-processing passes.
+/// Memory layout must match the MSL `PostProcessUniforms` struct exactly.
+public struct PostProcessUniforms: Sendable {
+    public var exposureMultiplier: Float
+    public var focusDistance: Float
+    public var aperture: Float
+    public var focalLengthM: Float
+    public var sensorHeightM: Float
+    public var shutterAngle: Float
+    public var nearZ: Float
+    public var farZ: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init(
+        exposureMultiplier: Float = 1.0,
+        focusDistance: Float = 10.0,
+        aperture: Float = 2.8,
+        focalLengthM: Float = 0.05,
+        sensorHeightM: Float = 0.024,
+        shutterAngle: Float = 180.0,
+        nearZ: Float = 0.1,
+        farZ: Float = 1000.0,
+        screenWidth: Float = 1920,
+        screenHeight: Float = 1080
+    ) {
+        self.exposureMultiplier = exposureMultiplier
+        self.focusDistance = focusDistance
+        self.aperture = aperture
+        self.focalLengthM = focalLengthM
+        self.sensorHeightM = sensorHeightM
+        self.shutterAngle = shutterAngle
+        self.nearZ = nearZ
+        self.farZ = farZ
+        self.screenWidth = screenWidth
+        self.screenHeight = screenHeight
+    }
+}
+
+/// Uniform buffer for motion blur (previous frame data).
+/// Memory layout must match the MSL `MotionBlurUniforms` struct exactly.
+public struct MotionBlurUniforms: Sendable {
+    public var viewProjectionMatrix: simd_float4x4
+    public var previousViewProjectionMatrix: simd_float4x4
+    public var inverseViewProjectionMatrix: simd_float4x4
+    public var shutterAngle: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+
+    public init(
+        viewProjectionMatrix: simd_float4x4 = matrix_identity_float4x4,
+        previousViewProjectionMatrix: simd_float4x4 = matrix_identity_float4x4,
+        inverseViewProjectionMatrix: simd_float4x4 = matrix_identity_float4x4,
+        shutterAngle: Float = 180.0,
+        screenWidth: Float = 1920,
+        screenHeight: Float = 1080
+    ) {
+        self.viewProjectionMatrix = viewProjectionMatrix
+        self.previousViewProjectionMatrix = previousViewProjectionMatrix
+        self.inverseViewProjectionMatrix = inverseViewProjectionMatrix
+        self.shutterAngle = shutterAngle
+        self.screenWidth = screenWidth
+        self.screenHeight = screenHeight
     }
 }
 

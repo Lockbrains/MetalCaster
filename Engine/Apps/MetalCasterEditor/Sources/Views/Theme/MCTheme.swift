@@ -18,6 +18,8 @@ enum MCTheme {
     static let statusRed = Color(red: 0.95, green: 0.3, blue: 0.3)
     static let statusGray = Color.white.opacity(0.35)
     static let statusBlue = Color(red: 0.3, green: 0.55, blue: 1.0)
+    static let statusOrange = Color(red: 0.95, green: 0.6, blue: 0.2)
+    static let statusYellow = Color(red: 0.95, green: 0.85, blue: 0.3)
 
     static let inputBorder = Color.white.opacity(0.12)
     static let inputBackground = Color.white.opacity(0.04)

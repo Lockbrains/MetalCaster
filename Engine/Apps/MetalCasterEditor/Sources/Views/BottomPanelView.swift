@@ -137,6 +137,17 @@ struct ProjectAssetsView: View {
 
     @ViewBuilder
     private var assetAreaContextMenu: some View {
+        if state.selectedAssetCategory == .scenes {
+            Button {
+                state.requestNewScene()
+                state.refreshAssetBrowser()
+            } label: {
+                Label("New Scene", systemImage: "film.fill")
+            }
+
+            Divider()
+        }
+
         Button {
             state.showImportPanel = true
         } label: {
@@ -233,18 +244,22 @@ struct ProjectAssetsView: View {
 
     // MARK: - Asset List
 
+    private static let hiddenExtensions: Set<String> = ["mcmeta", "meta"]
+
     private var assetListView: some View {
         let _ = state.assetBrowserRevision
         let entries = state.assetDatabase.entries(
             in: state.selectedAssetCategory,
             subfolder: state.assetBrowserSubfolder
-        )
+        ).filter { entry in
+            !Self.hiddenExtensions.contains(entry.fileExtension.lowercased())
+        }
 
         return ScrollView {
             if entries.isEmpty {
                 emptyStateView
             } else {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(entries) { entry in
                         AssetListRow(entry: entry)
                     }
@@ -275,6 +290,7 @@ struct ProjectAssetsView: View {
 
     private var searchResultsView: some View {
         let results = state.assetDatabase.search(query: state.assetBrowserSearchQuery)
+            .filter { !Self.hiddenExtensions.contains($0.fileExtension.lowercased()) }
 
         return ScrollView {
             if results.isEmpty {
@@ -290,7 +306,7 @@ struct ProjectAssetsView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(results) { entry in
                         AssetListRow(entry: entry)
                     }
@@ -308,7 +324,7 @@ struct ProjectAssetsView: View {
             let entries = state.assetDatabase.entries(
                 in: state.selectedAssetCategory,
                 subfolder: state.assetBrowserSubfolder
-            )
+            ).filter { !Self.hiddenExtensions.contains($0.fileExtension.lowercased()) }
             let fileCount = entries.filter { !$0.isDirectory }.count
             Text("\(fileCount) item\(fileCount == 1 ? "" : "s")")
                 .font(MCTheme.fontSmall)
@@ -352,16 +368,23 @@ struct AssetListRow: View {
     @Environment(EditorState.self) private var state
     @State private var isRenaming = false
     @State private var renameText = ""
+    @State private var lastClickTime: Date = .distantPast
+
+    private static let doubleClickInterval: TimeInterval = 0.3
 
     var body: some View {
         let isSelected = state.selectedAssetEntry?.guid == entry.guid
 
         rowContent(isSelected: isSelected)
-            .onTapGesture(count: 2) {
-                handleDoubleClick()
-            }
-            .onTapGesture(count: 1) {
-                handleSingleClick()
+            .onTapGesture {
+                let now = Date()
+                if now.timeIntervalSince(lastClickTime) < Self.doubleClickInterval {
+                    lastClickTime = .distantPast
+                    handleDoubleClick()
+                } else {
+                    lastClickTime = now
+                    state.selectedAssetEntry = entry
+                }
             }
             .contextMenu {
                 assetContextMenu
@@ -460,14 +483,6 @@ struct AssetListRow: View {
         }
     }
 
-    private func handleSingleClick() {
-        if entry.isDirectory {
-            state.enterAssetSubfolder(entry.name)
-        } else {
-            state.selectedAssetEntry = entry
-        }
-    }
-
     private func handleDoubleClick() {
         if entry.isDirectory {
             state.enterAssetSubfolder(entry.name)
@@ -475,7 +490,7 @@ struct AssetListRow: View {
             switch entry.category {
             case .scenes:
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
-                    state.loadScene(from: url)
+                    state.requestLoadScene(from: url)
                 }
             default:
                 #if os(macOS)
@@ -503,6 +518,9 @@ struct AssetListRow: View {
     }
 
     private var fileIcon: String {
+        if entry.category == .scenes && entry.fileExtension == "usda" {
+            return "film"
+        }
         switch entry.fileExtension {
         case "mcscene": return "film"
         case "usdz", "usd", "usda", "usdc", "obj": return "cube"

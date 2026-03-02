@@ -82,6 +82,11 @@ public final class EditorState {
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
 
+    /// Shown when the user attempts a destructive scene action while dirty.
+    public var showSaveDirtyAlert: Bool = false
+    /// The action to perform after the user resolves the dirty alert.
+    public var pendingSceneAction: (() -> Void)?
+
     // MARK: - Asset Browser State
 
     public var selectedAssetCategory: AssetCategory = .scenes
@@ -150,6 +155,10 @@ public final class EditorState {
         case rendered = "Rendered"
     }
     public var sceneRenderMode: SceneRenderMode = .rendered
+
+    // MARK: - Project Render Target
+
+    public var renderTargetConfig = RenderTargetConfig()
 
     // MARK: - Scene Editor Display
 
@@ -285,6 +294,7 @@ public final class EditorState {
         let entity = sceneGraph.createEntity(name: "Empty Entity")
         selectedEntity = entity
         worldRevision += 1
+        markDirty()
         return entity
     }
 
@@ -304,6 +314,7 @@ public final class EditorState {
         )
         selectedEntity = entity
         worldRevision += 1
+        markDirty()
         return entity
     }
 
@@ -316,6 +327,7 @@ public final class EditorState {
         engine.world.addComponent(CameraComponent(isActive: false), to: entity)
         selectedEntity = entity
         worldRevision += 1
+        markDirty()
         return entity
     }
 
@@ -328,6 +340,7 @@ public final class EditorState {
         )
         selectedEntity = entity
         worldRevision += 1
+        markDirty()
         return entity
     }
 
@@ -343,7 +356,48 @@ public final class EditorState {
         )
         selectedEntity = entity
         worldRevision += 1
+        markDirty()
         return entity
+    }
+
+    @discardableResult
+    public func addSpotLight() -> Entity {
+        let entity = sceneGraph.createEntity(
+            name: "Spot Light",
+            position: SIMD3<Float>(0, 3, 0)
+        )
+        engine.world.addComponent(
+            LightComponent(type: .spot, range: 15),
+            to: entity
+        )
+        selectedEntity = entity
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    // MARK: - Manager Operations
+
+    @discardableResult
+    public func addManager(_ type: ManagerComponent.ManagerType) -> Entity? {
+        let existing = engine.world.query(ManagerComponent.self)
+        if existing.contains(where: { $0.1.managerType == type }) { return nil }
+
+        let entity = sceneGraph.createEntity(name: type.rawValue)
+        engine.world.addComponent(ManagerComponent(managerType: type), to: entity)
+        selectedEntity = entity
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    public func removeManager(_ type: ManagerComponent.ManagerType) {
+        let managers = engine.world.query(ManagerComponent.self)
+        guard let (entity, _) = managers.first(where: { $0.1.managerType == type }) else { return }
+        sceneGraph.destroyEntityRecursive(entity)
+        if selectedEntity == entity { selectedEntity = nil }
+        worldRevision += 1
+        markDirty()
     }
 
     public func deleteSelectedEntity() {
@@ -351,11 +405,15 @@ public final class EditorState {
         sceneGraph.destroyEntityRecursive(entity)
         selectedEntity = nil
         worldRevision += 1
+        markDirty()
     }
 
     public func duplicateSelectedEntity() {
         guard let entity = selectedEntity else { return }
         let world = engine.world
+
+        if world.hasComponent(ManagerComponent.self, on: entity) { return }
+
         let name = sceneGraph.name(of: entity) + " Copy"
         let copy = sceneGraph.createEntity(name: name)
 
@@ -380,6 +438,7 @@ public final class EditorState {
 
         selectedEntity = copy
         worldRevision += 1
+        markDirty()
     }
 
     // MARK: - Scene IO
@@ -389,7 +448,7 @@ public final class EditorState {
     }
 
     private var defaultSceneURL: URL? {
-        scenesDirectory?.appendingPathComponent("default.mcscene")
+        scenesDirectory?.appendingPathComponent("default.usda")
     }
 
     private static let lastOpenedSceneKey = "MetalCaster.lastOpenedScene"
@@ -402,11 +461,31 @@ public final class EditorState {
     public func newScene() {
         engine.world.clear()
         selectedEntity = nil
-        currentFileURL = nil
         sceneName = "Untitled Scene"
         isSceneDirty = false
         setupDefaultScene()
         worldRevision += 1
+
+        let url = nextAvailableSceneURL(baseName: "Untitled Scene")
+        currentFileURL = url
+        if let url = url {
+            sceneName = url.deletingPathExtension().lastPathComponent
+            saveScene(to: url)
+        }
+    }
+
+    private func nextAvailableSceneURL(baseName: String) -> URL? {
+        guard let dir = scenesDirectory else { return nil }
+        ensureDirectories()
+        let fm = FileManager.default
+        let sanitized = baseName.replacingOccurrences(of: " ", with: "_")
+        var candidate = dir.appendingPathComponent("\(sanitized).usda")
+        var counter = 1
+        while fm.fileExists(atPath: candidate.path) {
+            candidate = dir.appendingPathComponent("\(sanitized)_\(counter).usda")
+            counter += 1
+        }
+        return candidate
     }
 
     public func saveScene() {
@@ -421,12 +500,17 @@ public final class EditorState {
     public func saveScene(to url: URL) {
         ensureDirectories()
         do {
-            let data = try sceneSerializer.serialize(sceneGraph: sceneGraph, world: engine.world)
-            try data.write(to: url)
-            currentFileURL = url
-            sceneName = url.deletingPathExtension().lastPathComponent
+            let usdaURL: URL
+            if url.pathExtension == "usda" {
+                usdaURL = url
+            } else {
+                usdaURL = url.deletingPathExtension().appendingPathExtension("usda")
+            }
+            try usdExporter.writeScene(sceneGraph: sceneGraph, world: engine.world, to: usdaURL)
+            currentFileURL = usdaURL
+            sceneName = usdaURL.deletingPathExtension().lastPathComponent
             isSceneDirty = false
-            UserDefaults.standard.set(url.path, forKey: Self.lastOpenedSceneKey)
+            UserDefaults.standard.set(usdaURL.path, forKey: Self.lastOpenedSceneKey)
         } catch {
             print("[MetalCaster] Failed to save scene: \(error)")
         }
@@ -436,8 +520,8 @@ public final class EditorState {
         #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Save Scene"
-        panel.nameFieldStringValue = sceneName + ".mcscene"
-        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = sceneName + ".usda"
+        panel.allowedContentTypes = [UTType(filenameExtension: "usda") ?? .plainText]
         panel.directoryURL = scenesDirectory
         panel.begin { response in
             if response == .OK, let url = panel.url {
@@ -448,17 +532,69 @@ public final class EditorState {
     }
 
     public func loadScene(from url: URL) {
+        autoSaveTask?.cancel()
         do {
-            let data = try Data(contentsOf: url)
-            try sceneSerializer.deserialize(data: data, into: engine.world, sceneGraph: sceneGraph)
+            if url.pathExtension == "usda" {
+                try usdImporter.loadScene(from: url, into: engine.world, sceneGraph: sceneGraph)
+            } else {
+                let data = try Data(contentsOf: url)
+                try sceneSerializer.deserialize(data: data, into: engine.world, sceneGraph: sceneGraph)
+            }
             currentFileURL = url
             sceneName = url.deletingPathExtension().lastPathComponent
             selectedEntity = nil
+            isSceneDirty = false
             worldRevision += 1
             UserDefaults.standard.set(url.path, forKey: Self.lastOpenedSceneKey)
         } catch {
             print("[MetalCaster] Failed to load scene: \(error)")
         }
+    }
+
+    /// Requests a scene load, prompting save if the current scene has unsaved changes.
+    public func requestLoadScene(from url: URL) {
+        guard isSceneDirty else {
+            loadScene(from: url)
+            return
+        }
+        pendingSceneAction = { [weak self] in
+            self?.loadScene(from: url)
+        }
+        showSaveDirtyAlert = true
+    }
+
+    /// Requests a new scene, prompting save if the current scene has unsaved changes.
+    public func requestNewScene() {
+        guard isSceneDirty else {
+            newScene()
+            return
+        }
+        pendingSceneAction = { [weak self] in
+            self?.newScene()
+        }
+        showSaveDirtyAlert = true
+    }
+
+    /// Saves the current scene and then executes the pending action.
+    public func saveAndExecutePendingAction() {
+        saveScene()
+        let action = pendingSceneAction
+        pendingSceneAction = nil
+        action?()
+    }
+
+    /// Discards changes and executes the pending action.
+    public func discardAndExecutePendingAction() {
+        isSceneDirty = false
+        autoSaveTask?.cancel()
+        let action = pendingSceneAction
+        pendingSceneAction = nil
+        action?()
+    }
+
+    /// Cancels the pending scene action.
+    public func cancelPendingAction() {
+        pendingSceneAction = nil
     }
 
     public func tryLoadLastScene() {
@@ -483,6 +619,14 @@ public final class EditorState {
         if let defaultURL = defaultSceneURL,
            FileManager.default.fileExists(atPath: defaultURL.path) {
             loadScene(from: defaultURL)
+            return
+        }
+
+        if let defaultURL = defaultSceneURL {
+            ensureDirectories()
+            currentFileURL = defaultURL
+            sceneName = "default"
+            saveScene(to: defaultURL)
         }
     }
 

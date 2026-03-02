@@ -33,7 +33,7 @@ struct MetalCasterEditorApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Scene") {
-                    editorState?.newScene()
+                    editorState?.requestNewScene()
                 }
                 .keyboardShortcut("n")
                 .disabled(editorState == nil)
@@ -80,25 +80,27 @@ struct MetalCasterEditorApp: App {
                 }
                 .disabled(editorState == nil)
 
-                Button("Add Directional Light") {
-                    editorState?.addDirectionalLight()
-                }
-                .disabled(editorState == nil)
-
-                Button("Add Point Light") {
-                    editorState?.addPointLight()
-                }
-                .disabled(editorState == nil)
-
                 Divider()
 
-                Button("Add Cube") {
-                    editorState?.addMeshEntity(name: "Cube", meshType: .cube)
+                Menu("Add Primitive") {
+                    ForEach(MeshType.builtinPrimitives, id: \.displayName) { meshType in
+                        Button("Add \(meshType.displayName)") {
+                            editorState?.addMeshEntity(name: meshType.displayName, meshType: meshType)
+                        }
+                    }
                 }
                 .disabled(editorState == nil)
 
-                Button("Add Sphere") {
-                    editorState?.addMeshEntity(name: "Sphere", meshType: .sphere)
+                Menu("Add Light") {
+                    Button("Directional Light") {
+                        editorState?.addDirectionalLight()
+                    }
+                    Button("Point Light") {
+                        editorState?.addPointLight()
+                    }
+                    Button("Spot Light") {
+                        editorState?.addSpotLight()
+                    }
                 }
                 .disabled(editorState == nil)
 

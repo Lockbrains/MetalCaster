@@ -125,15 +125,14 @@ struct InspectorView: View {
 
     @ViewBuilder
     private func cameraSection(_ entity: Entity) -> some View {
+        let cam = state.engine.world.getComponent(CameraComponent.self, from: entity)
+
+        // MARK: Projection & Base
         MCSection(title: "Camera") {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Projection", selection: Binding(
-                    get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.projection ?? .perspective },
-                    set: { val in
-                        state.updateComponent(CameraComponent.self, on: entity) { cam in
-                            cam.projection = val
-                        }
-                    }
+                    get: { cam?.projection ?? .perspective },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.projection = val } }
                 )) {
                     Text("Perspective").tag(CameraComponent.Projection.perspective)
                     Text("Orthographic").tag(CameraComponent.Projection.orthographic)
@@ -141,41 +140,279 @@ struct InspectorView: View {
                 .pickerStyle(.menu)
                 .foregroundStyle(MCTheme.textPrimary)
 
-                HStack {
-                    Text("FOV")
-                        .font(MCTheme.fontCaption)
-                        .foregroundStyle(MCTheme.textSecondary)
-                        .frame(width: 70, alignment: .leading)
-                    Slider(value: Binding(
-                        get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.fov ?? 1.047 },
-                        set: { val in
-                            state.updateComponent(CameraComponent.self, on: entity) { cam in
-                                cam.fov = val
-                            }
-                        }
-                    ), in: 0.1...Float.pi)
-                    Text(String(format: "%.2f", state.engine.world.getComponent(CameraComponent.self, from: entity)?.fov ?? 0))
-                        .font(MCTheme.fontCaption)
-                        .foregroundStyle(MCTheme.textSecondary)
-                        .frame(width: 40, alignment: .trailing)
+                Toggle("Physical Camera", isOn: Binding(
+                    get: { cam?.usePhysicalProperties ?? false },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.usePhysicalProperties = val } }
+                ))
+                .foregroundStyle(MCTheme.textSecondary)
+
+                if cam?.usePhysicalProperties != true {
+                    cameraFOVRow(entity)
                 }
 
                 liveFloatRow(label: "Near", entity: entity,
-                    get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.nearZ ?? 0.1 },
+                    get: { cam?.nearZ ?? 0.1 },
                     set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.nearZ = val } })
                 liveFloatRow(label: "Far", entity: entity,
-                    get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.farZ ?? 1000 },
+                    get: { cam?.farZ ?? 1000 },
                     set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.farZ = val } })
-                liveFloatRow(label: "Ortho Size", entity: entity,
-                    get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.orthoSize ?? 5 },
-                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.orthoSize = val } })
+
+                if cam?.projection == .orthographic {
+                    liveFloatRow(label: "Ortho Size", entity: entity,
+                        get: { cam?.orthoSize ?? 5 },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.orthoSize = val } })
+                }
 
                 Toggle("Active", isOn: Binding(
-                    get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.isActive ?? false },
+                    get: { cam?.isActive ?? false },
                     set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.isActive = val } }
                 ))
                 .foregroundStyle(MCTheme.textSecondary)
             }
+        }
+
+        // MARK: Lens (Physical)
+        if cam?.usePhysicalProperties == true {
+            MCSection(title: "Lens") {
+                VStack(alignment: .leading, spacing: 8) {
+                    cameraLensSection(entity, cam: cam)
+                }
+            }
+
+            MCSection(title: "Exposure") {
+                VStack(alignment: .leading, spacing: 8) {
+                    cameraExposureSection(entity, cam: cam)
+                }
+            }
+
+            MCSection(title: "Focus") {
+                VStack(alignment: .leading, spacing: 8) {
+                    liveFloatRow(label: "Distance", entity: entity,
+                        get: { cam?.focusDistance ?? 10.0 },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.focusDistance = max(0.1, val) } })
+                    liveFloatRow(label: "Shutter Angle", entity: entity,
+                        get: { cam?.shutterAngle ?? 180.0 },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.shutterAngle = max(1, min(360, val)) } })
+                }
+            }
+        }
+
+        // MARK: Rendering
+        MCSection(title: "Rendering") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Post Processing", isOn: Binding(
+                    get: { cam?.allowPostProcessing ?? true },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowPostProcessing = val } }
+                ))
+                .foregroundStyle(MCTheme.textSecondary)
+
+                Toggle("HDR", isOn: Binding(
+                    get: { cam?.allowHDR ?? true },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowHDR = val } }
+                ))
+                .foregroundStyle(MCTheme.textSecondary)
+
+                Picker("Background", selection: Binding(
+                    get: { cam?.backgroundType ?? .solidColor },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.backgroundType = val } }
+                )) {
+                    ForEach(CameraBackgroundType.allCases, id: \.rawValue) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Picker("Depth Mode", selection: Binding(
+                    get: { cam?.depthTextureMode ?? .depth },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.depthTextureMode = val } }
+                )) {
+                    ForEach(DepthTextureMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                liveFloatRow(label: "Priority", entity: entity,
+                    get: { Float(cam?.renderingPriority ?? 0) },
+                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.renderingPriority = Int(val) } })
+            }
+        }
+    }
+
+    // MARK: - Camera Sub-Sections
+
+    @ViewBuilder
+    private func cameraFOVRow(_ entity: Entity) -> some View {
+        HStack {
+            Text("FOV")
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            Slider(value: Binding(
+                get: { state.engine.world.getComponent(CameraComponent.self, from: entity)?.fov ?? 1.047 },
+                set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.fov = val } }
+            ), in: 0.1...Float.pi)
+            Text(String(format: "%.0f\u{00B0}", (state.engine.world.getComponent(CameraComponent.self, from: entity)?.fov ?? 1.047) * 180.0 / .pi))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func cameraLensSection(_ entity: Entity, cam: CameraComponent?) -> some View {
+        // Sensor Preset
+        Picker("Sensor", selection: Binding(
+            get: { cam?.sensorPreset ?? .fullFrame },
+            set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.sensorPreset = val } }
+        )) {
+            ForEach(SensorPreset.allCases) { preset in
+                Text(preset.rawValue).tag(preset)
+            }
+        }
+        .pickerStyle(.menu)
+        .foregroundStyle(MCTheme.textPrimary)
+
+        // Focal Length
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Focal Length")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                Spacer()
+                Text(String(format: "%.0f mm", cam?.focalLength ?? 50))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+            }
+            Slider(value: Binding(
+                get: { cam?.focalLength ?? 50.0 },
+                set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.focalLength = val } }
+            ), in: 8...400)
+            HStack(spacing: 4) {
+                ForEach(CameraComponent.commonFocalLengths, id: \.self) { fl in
+                    Button(String(format: "%.0f", fl)) {
+                        state.updateComponent(CameraComponent.self, on: entity) { $0.focalLength = fl }
+                    }
+                    .buttonStyle(.plain)
+                    .font(MCTheme.fontSmall)
+                    .foregroundStyle(cam?.focalLength == fl ? MCTheme.textPrimary : MCTheme.textTertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(cam?.focalLength == fl ? MCTheme.surfaceSelected : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+        }
+
+        // Computed FOV (read-only)
+        HStack {
+            Text("Effective FOV")
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textTertiary)
+            Spacer()
+            Text(String(format: "%.1f\u{00B0}", (cam?.physicalFOV ?? 0) * 180.0 / .pi))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private func cameraExposureSection(_ entity: Entity, cam: CameraComponent?) -> some View {
+        // Aperture (f-stop)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Aperture")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                Spacer()
+                Text(String(format: "f/%.1f", cam?.aperture ?? 2.8))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+            }
+            HStack(spacing: 4) {
+                ForEach(CameraComponent.commonApertures, id: \.self) { ap in
+                    Button(String(format: "%.1f", ap)) {
+                        state.updateComponent(CameraComponent.self, on: entity) { $0.aperture = ap }
+                    }
+                    .buttonStyle(.plain)
+                    .font(MCTheme.fontSmall)
+                    .foregroundStyle(cam?.aperture == ap ? MCTheme.textPrimary : MCTheme.textTertiary)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 2)
+                    .background(cam?.aperture == ap ? MCTheme.surfaceSelected : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+        }
+
+        // ISO
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("ISO")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                Spacer()
+                Text(String(format: "%.0f", cam?.iso ?? 200))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+            }
+            HStack(spacing: 4) {
+                ForEach(CameraComponent.commonISOs, id: \.self) { isoVal in
+                    Button(String(format: "%.0f", isoVal)) {
+                        state.updateComponent(CameraComponent.self, on: entity) { $0.iso = isoVal }
+                    }
+                    .buttonStyle(.plain)
+                    .font(MCTheme.fontSmall)
+                    .foregroundStyle(cam?.iso == isoVal ? MCTheme.textPrimary : MCTheme.textTertiary)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 2)
+                    .background(cam?.iso == isoVal ? MCTheme.surfaceSelected : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+            }
+        }
+
+        // Shutter Speed
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Shutter Speed")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                Spacer()
+                Text(CameraComponent.shutterSpeedLabel(for: cam?.shutterSpeed ?? (1.0 / 125.0)))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(CameraComponent.commonShutterSpeeds, id: \.value) { item in
+                        let isSelected = abs((cam?.shutterSpeed ?? 0) - item.value) / max(item.value, 1e-6) < 0.01
+                        Button(item.label) {
+                            state.updateComponent(CameraComponent.self, on: entity) { $0.shutterSpeed = item.value }
+                        }
+                        .buttonStyle(.plain)
+                        .font(MCTheme.fontSmall)
+                        .foregroundStyle(isSelected ? MCTheme.textPrimary : MCTheme.textTertiary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+            }
+        }
+
+        // EV100 (read-only)
+        HStack {
+            Text("EV100")
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textTertiary)
+            Spacer()
+            Text(String(format: "%.1f", cam?.ev100 ?? 0))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
         }
     }
 
@@ -323,10 +560,9 @@ struct InspectorView: View {
 
     private func meshTypeDisplay(_ type: MeshType) -> String {
         switch type {
-        case .sphere: return "Sphere"
-        case .cube: return "Cube"
         case .custom(let url): return "Custom: \(url.lastPathComponent)"
         case .asset(let guid): return "Asset: \(guid.uuidString.prefix(8))..."
+        default: return type.displayName
         }
     }
 }

@@ -168,6 +168,37 @@ public final class World: @unchecked Sendable {
         return results
     }
 
+    // MARK: - Introspection
+
+    /// All component type keys currently registered in this world.
+    public var registeredComponentTypes: [ComponentTypeKey] {
+        Array(storage.keys)
+    }
+
+    /// Returns the component type keys attached to a specific entity.
+    public func componentTypeKeys(of entity: Entity) -> [ComponentTypeKey] {
+        storage.compactMap { (key, map) in
+            map[entity] != nil ? key : nil
+        }
+    }
+
+    /// The set of component type names for an entity, used to compute virtual archetypes.
+    public func archetypeSignature(of entity: Entity) -> Set<String> {
+        Set(componentTypeKeys(of: entity).map(\.name))
+    }
+
+    /// Returns all entities whose component type set matches the given key (type-erased).
+    public func entitiesWithComponent(key: ComponentTypeKey) -> [Entity] {
+        guard let map = storage[key] else { return [] }
+        return Array(map.keys)
+    }
+
+    /// Estimated memory stride for a component type, derived from any stored instance.
+    public func estimatedComponentSize(for key: ComponentTypeKey) -> Int? {
+        guard let map = storage[key], let anyComponent = map.values.first else { return nil }
+        return type(of: anyComponent).estimatedSize
+    }
+
     // MARK: - Bulk Operations
 
     /// Removes all entities and components.

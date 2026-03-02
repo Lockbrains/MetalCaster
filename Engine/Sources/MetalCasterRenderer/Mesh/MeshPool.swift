@@ -86,6 +86,41 @@ public final class MeshPool {
                 geometryType: .triangles,
                 allocator: allocator
             )
+        case .plane:
+            mdlMesh = MDLMesh(
+                planeWithExtent: [2, 0, 2],
+                segments: [1, 1],
+                geometryType: .triangles,
+                allocator: allocator
+            )
+        case .cylinder:
+            mdlMesh = MDLMesh(
+                cylinderWithExtent: [2, 2, 2],
+                segments: [60, 1],
+                inwardNormals: false,
+                topCap: true,
+                bottomCap: true,
+                geometryType: .triangles,
+                allocator: allocator
+            )
+        case .cone:
+            mdlMesh = MDLMesh(
+                coneWithExtent: [2, 2, 2],
+                segments: [60, 1],
+                inwardNormals: false,
+                cap: true,
+                geometryType: .triangles,
+                allocator: allocator
+            )
+        case .capsule:
+            mdlMesh = MDLMesh(
+                capsuleWithExtent: [2, 3, 2],
+                cylinderSegments: [60, 1],
+                hemisphereSegments: 30,
+                inwardNormals: false,
+                geometryType: .triangles,
+                allocator: allocator
+            )
         case .custom(let url):
             let asset = MDLAsset(
                 url: url,
@@ -98,8 +133,6 @@ public final class MeshPool {
                 return mesh(for: .sphere)
             }
         case .asset:
-            // .asset(UUID) must be resolved to a URL before calling mesh(for:).
-            // Use resolveAssetMeshType(_:) to convert to .custom(URL) first.
             return mesh(for: .sphere)
         }
 
@@ -121,6 +154,10 @@ public final class MeshPool {
         switch type {
         case .sphere: return "builtin:sphere"
         case .cube: return "builtin:cube"
+        case .plane: return "builtin:plane"
+        case .cylinder: return "builtin:cylinder"
+        case .cone: return "builtin:cone"
+        case .capsule: return "builtin:capsule"
         case .custom(let url): return "custom:\(url.path)"
         case .asset(let guid): return "asset:\(guid.uuidString)"
         }

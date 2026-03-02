@@ -29,7 +29,7 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
 
     public var acceptedExtensions: Set<String> {
         switch self {
-        case .scenes:    return ["mcscene"]
+        case .scenes:    return ["usda", "mcscene", "mcmeta"]
         case .meshes:    return ["usdz", "usd", "usda", "usdc", "obj"]
         case .textures:  return ["png", "jpg", "jpeg", "tiff", "exr", "hdr"]
         case .materials: return ["mcmat"]

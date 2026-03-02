@@ -6,6 +6,7 @@ import MetalCasterScene
 struct EditorContentView: View {
     @Environment(EditorState.self) private var state
     @State private var agentTab = 0
+    @State private var hierarchyTab = 0
 
     var body: some View {
         VSplitView {
@@ -15,8 +16,10 @@ struct EditorContentView: View {
                 }
                 .frame(minWidth: 300, minHeight: 200)
 
-                MCPanel(titleNormal: "Entity", titleBold: "Hierarchy") {
-                    SceneHierarchyView()
+                MCPanelCustomTitle {
+                    SceneHierarchyView(selectedTab: $hierarchyTab)
+                } title: {
+                    hierarchyPanelTitle
                 }
                 .frame(minWidth: 180, idealWidth: 240, maxWidth: 400)
 
@@ -65,7 +68,7 @@ struct EditorContentView: View {
             allowedContentTypes: [.json],
             onCompletion: { result in
                 if case .success(let url) = result {
-                    state.loadScene(from: url)
+                    state.requestLoadScene(from: url)
                 }
             }
         )
@@ -88,6 +91,46 @@ struct EditorContentView: View {
             BuildPanelView()
                 .environment(state)
                 .frame(width: 500, height: 420)
+        }
+        .alert(
+            "Unsaved Changes",
+            isPresented: Binding(
+                get: { state.showSaveDirtyAlert },
+                set: { state.showSaveDirtyAlert = $0 }
+            )
+        ) {
+            Button("Save") {
+                state.saveAndExecutePendingAction()
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Discard", role: .destructive) {
+                state.discardAndExecutePendingAction()
+            }
+            Button("Cancel", role: .cancel) {
+                state.cancelPendingAction()
+            }
+        } message: {
+            Text("Scene \"\(state.sceneName)\" has unsaved changes. Do you want to save before continuing?")
+        }
+    }
+
+    private var hierarchyPanelTitle: some View {
+        HStack(spacing: 4) {
+            Button { hierarchyTab = 0 } label: {
+                Text("Entity")
+                    .font(hierarchyTab == 0 ? MCTheme.fontPanelLabelBold : MCTheme.fontPanelLabel)
+                    .foregroundStyle(hierarchyTab == 0 ? MCTheme.textPrimary : MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+
+            Button { hierarchyTab = 1 } label: {
+                Text("Archetype")
+                    .font(hierarchyTab == 1 ? MCTheme.fontPanelLabelBold : MCTheme.fontPanelLabel)
+                    .foregroundStyle(hierarchyTab == 1 ? MCTheme.textPrimary : MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
         }
     }
 

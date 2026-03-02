@@ -6,11 +6,18 @@ import Foundation
 public protocol Component: Codable, Sendable {
     /// A unique string identifying this component type for serialization and reflection.
     static var componentName: String { get }
+
+    /// Estimated memory footprint per instance (bytes). Defaults to `MemoryLayout<Self>.stride`.
+    static var estimatedSize: Int { get }
 }
 
 extension Component {
     public static var componentName: String {
         String(describing: Self.self)
+    }
+
+    public static var estimatedSize: Int {
+        MemoryLayout<Self>.stride
     }
 }
 

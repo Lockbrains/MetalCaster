@@ -35,6 +35,9 @@ public final class SceneSerializer {
             if let light = world.getComponent(LightComponent.self, from: entity) {
                 entityData.light = light
             }
+            if let manager = world.getComponent(ManagerComponent.self, from: entity) {
+                entityData.manager = manager
+            }
             
             sceneData.entities.append(entityData)
         }
@@ -86,6 +89,9 @@ public final class SceneSerializer {
             if let light = ed.light {
                 world.addComponent(light, to: entity)
             }
+            if let manager = ed.manager {
+                world.addComponent(manager, to: entity)
+            }
         }
     }
 }
@@ -105,4 +111,5 @@ struct EntityData: Codable {
     var material: MaterialComponent?
     var camera: CameraComponent?
     var light: LightComponent?
+    var manager: ManagerComponent?
 }

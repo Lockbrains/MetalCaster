@@ -240,7 +240,15 @@ final class EditorEngineAPI: EngineAPIProvider {
             world.addComponent(LightComponent(type: lightType, intensity: intensity), to: entity)
         case "Mesh":
             let meshTypeStr = params["meshType"]?.stringValue ?? "cube"
-            let meshType: MeshType = meshTypeStr == "sphere" ? .sphere : .cube
+            let meshType: MeshType
+            switch meshTypeStr {
+            case "sphere": meshType = .sphere
+            case "plane": meshType = .plane
+            case "cylinder": meshType = .cylinder
+            case "cone": meshType = .cone
+            case "capsule": meshType = .capsule
+            default: meshType = .cube
+            }
             world.addComponent(MeshComponent(meshType: meshType), to: entity)
         case "Material":
             let matName = params["name"]?.stringValue ?? "New Material"

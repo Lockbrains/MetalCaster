@@ -46,9 +46,17 @@ struct GameViewportView: View {
     @Environment(EditorState.self) private var state
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             EditorMetalView(viewportID: 1, state: state)
-            statsOverlay
+            VStack {
+                HStack {
+                    renderTargetSelector
+                    Spacer()
+                    statsOverlay
+                }
+                Spacer()
+            }
+            .padding(8)
         }
         .background(Color.black)
     }
@@ -63,7 +71,63 @@ struct GameViewportView: View {
         .padding(8)
         .background(MCTheme.inputBackground)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(8)
+    }
+
+    private var renderTargetSelector: some View {
+        @Bindable var s = state
+        return HStack(spacing: 6) {
+            Menu {
+                ForEach(AppleDeviceCategory.allCases) { category in
+                    Menu(category.rawValue) {
+                        ForEach(AppleDevicePreset.presets(for: category)) { preset in
+                            Button("\(preset.name)  (\(preset.displayString))") {
+                                state.renderTargetConfig.mode = .devicePreset
+                                state.renderTargetConfig.presetID = preset.id
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("Custom...") {
+                    state.renderTargetConfig.mode = .custom
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    if let preset = state.renderTargetConfig.resolvedPreset {
+                        Image(systemName: preset.category.icon)
+                            .font(.system(size: 9))
+                        Text(preset.name)
+                            .font(MCTheme.fontSmall)
+                    } else {
+                        Image(systemName: "rectangle.dashed")
+                            .font(.system(size: 9))
+                        Text("Custom")
+                            .font(MCTheme.fontSmall)
+                    }
+                }
+                .foregroundStyle(MCTheme.textSecondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Text(state.renderTargetConfig.displayString)
+                .font(MCTheme.fontSmall)
+                .foregroundStyle(MCTheme.textTertiary)
+
+            Button {
+                state.renderTargetConfig.isLandscape.toggle()
+            } label: {
+                Image(systemName: state.renderTargetConfig.isLandscape ? "rectangle" : "rectangle.portrait")
+                    .font(.system(size: 9))
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help(state.renderTargetConfig.isLandscape ? "Landscape" : "Portrait")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(MCTheme.inputBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -216,6 +280,10 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     var gizmoRenderer: GizmoRenderer?
     var debugOverlayRenderer: DebugOverlayRenderer?
 
+    // Post-processing (Game Viewport only)
+    var postProcessStack: PostProcessStack?
+    var hdrRenderedPipeline: MTLRenderPipelineState?
+
     var lastMouseLocation: NSPoint?
     var mouseDownPoint: NSPoint?
     var didDrag: Bool = false
@@ -288,6 +356,15 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 depthFormat: .depth32Float,
                 vertexDescriptor: MeshPool.metalVertexDescriptor
             )
+            // HDR pipeline renders to rgba16Float for post-processing
+            hdrRenderedPipeline = try? shaderCompiler?.compilePipeline(
+                vertexSource: defaultVS,
+                fragmentSource: header + ShaderSnippets.defaultFragment,
+                colorFormat: .rgba16Float,
+                depthFormat: .depth32Float,
+                vertexDescriptor: MeshPool.metalVertexDescriptor
+            )
+            postProcessStack = PostProcessStack(device: device)
         }
     }
 
@@ -782,8 +859,15 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         guard let device = metalDevice,
               let commandBuffer = device.makeCommandBuffer(),
               let drawable = view.currentDrawable,
-              let rpd = view.currentRenderPassDescriptor,
               let pool = meshPool else { return }
+
+        // Determine whether Game Viewport uses post-processing
+        let camSys = state.cameraSystem
+        let usePostProcess = viewportID == 1
+            && camSys.allowPostProcessing
+            && camSys.usePhysicalProperties
+            && postProcessStack != nil
+            && hdrRenderedPipeline != nil
 
         let (yaw, pitch, dist, target): (Float, Float, Float, SIMD3<Float>)
         if viewportID == 0 {
@@ -845,12 +929,28 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 useWireframe = false
             }
         } else {
-            activePipeline = renderedPipeline
+            activePipeline = usePostProcess ? hdrRenderedPipeline : renderedPipeline
             useWireframe = false
         }
 
         guard let pipeline = activePipeline else { return }
 
+        // Build the render pass descriptor
+        let rpd: MTLRenderPassDescriptor
+        if usePostProcess, let ppStack = postProcessStack {
+            let w = Int(view.drawableSize.width)
+            let h = Int(view.drawableSize.height)
+            ppStack.ensureTextures(width: w, height: h)
+            let cc = camSys.clearColor
+            let clearColor = MTLClearColor(red: Double(cc.x), green: Double(cc.y), blue: Double(cc.z), alpha: Double(cc.w))
+            guard let offscreenRPD = ppStack.sceneRenderPassDescriptor(clearColor: clearColor) else { return }
+            rpd = offscreenRPD
+        } else {
+            guard let viewRPD = view.currentRenderPassDescriptor else { return }
+            rpd = viewRPD
+        }
+
+        // Scene rendering pass
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) {
             encoder.setDepthStencilState(device.depthStencilState)
 
@@ -859,7 +959,6 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 gridRenderer?.draw(encoder: encoder, viewProjectionMatrix: vpMatrix)
             }
 
-            // Restore depth state after grid (grid disables depth writes)
             encoder.setDepthStencilState(device.depthStencilState)
             encoder.setRenderPipelineState(pipeline)
             if useWireframe {
@@ -907,7 +1006,6 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     encoder.setCullMode(.none)
                 }
 
-                // Debug overlays for camera frustum / light visualization
                 if let tc = state.engine.world.getComponent(TransformComponent.self, from: selected) {
                     let cam = state.engine.world.getComponent(CameraComponent.self, from: selected)
                     let light = state.engine.world.getComponent(LightComponent.self, from: selected)
@@ -953,6 +1051,45 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             }
 
             encoder.endEncoding()
+        }
+
+        // Post-processing for Game Viewport
+        if usePostProcess, let ppStack = postProcessStack {
+            let screenW = Float(view.drawableSize.width)
+            let screenH = Float(view.drawableSize.height)
+
+            let ppUniforms = PostProcessUniforms(
+                exposureMultiplier: camSys.exposureMultiplier,
+                focusDistance: camSys.focusDistance,
+                aperture: camSys.apertureValue,
+                focalLengthM: camSys.focalLengthMM * 0.001,
+                sensorHeightM: camSys.sensorHeightMM * 0.001,
+                shutterAngle: camSys.shutterAngleValue,
+                nearZ: camSys.nearZ,
+                farZ: camSys.farZ,
+                screenWidth: screenW,
+                screenHeight: screenH
+            )
+
+            let vpMatrix = projMatrix * viewMatrix
+            let mbUniforms = MotionBlurUniforms(
+                viewProjectionMatrix: vpMatrix,
+                previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
+                inverseViewProjectionMatrix: vpMatrix.inverse,
+                shutterAngle: camSys.shutterAngleValue,
+                screenWidth: screenW,
+                screenHeight: screenH
+            )
+
+            ppStack.execute(
+                commandBuffer: commandBuffer,
+                drawableTexture: drawable.texture,
+                ppUniforms: ppUniforms,
+                mbUniforms: mbUniforms,
+                enableDoF: true,
+                enableExposure: true,
+                enableMotionBlur: true
+            )
         }
 
         commandBuffer.present(drawable)
