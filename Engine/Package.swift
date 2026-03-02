@@ -64,6 +64,7 @@ let package = Package(
         ),
         .target(
             name: "MetalCasterAI",
+            dependencies: ["MetalCasterCore"],
             path: "Sources/MetalCasterAI",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

@@ -18,14 +18,14 @@ public struct GPULightData: Sendable {
 
 /// Collects all light entities and prepares GPU-ready light data.
 public final class LightingSystem: System {
-    public var isEnabled: Bool = true
+    public nonisolated(unsafe) var isEnabled: Bool = true
     public var priority: Int { -80 }
     
     /// GPU-ready light data array, updated each frame.
-    public private(set) var lights: [GPULightData] = []
+    public nonisolated(unsafe) var lights: [GPULightData] = []
     
     /// Maximum number of lights supported.
-    public var maxLights: Int = 16
+    public nonisolated(unsafe) var maxLights: Int = 16
     
     public init() {}
     

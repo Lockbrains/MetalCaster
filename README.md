@@ -28,6 +28,8 @@ AI is not a plugin — it is the primary way users build games. Every subsystem 
 
 All internal data structures (ECS World, SceneGraph, Components) are introspectable by AI through structured context. MCP (Model Context Protocol) compatibility is a long-term goal for external AI tool integration.
 
+See [AI Agent System Documentation](AI_AGENTS.md) for the full agent architecture, tools, and Orchestrator protocol.
+
 ### 3. Apple Ecosystem, Exclusively
 
 Target platforms: **iOS, macOS, tvOS, visionOS**. No other platforms will ever be considered.
@@ -105,7 +107,7 @@ MetalCasterCore          (zero platform deps)
 | **MetalCasterInput** | Abstract input actions with device bindings, visionOS hand tracking support |
 | **MetalCasterPhysics** | Physics body/collider components, basic gravity and collision system |
 | **MetalCasterAudio** | Audio source component, AVAudioEngine wrapper with 3D spatial audio |
-| **MetalCasterAI** | Multi-provider AI service (OpenAI, Anthropic, Gemini), scene-aware chat |
+| **MetalCasterAI** | Multi-provider AI service (OpenAI, Anthropic, Gemini), 6 specialist agents with tool calling, Orchestrator for multi-agent coordination |
 
 ---
 
@@ -121,19 +123,18 @@ The Metal Caster Editor is a macOS application with a 3×2 panel layout:
 │                  │                  │                  │
 ├──────────────────┼──────────────────┼──────────────────┤
 │                  │                  │                  │
-│    Viewport      │     Project      │    Component     │
-│   Camera 02      │     Assets       │    Toolboxes     │
+│    Viewport      │     Project      │     Agent        │
+│   Camera 02      │     Assets       │   Discussion     │
 │                  │                  │                  │
 └──────────────────┴──────────────────┴──────────────────┘
-  Scene Preview | Post Processing | Scene Heatmap | Scene Graph
 ```
 
 - **Dual 3D viewports** with independent camera controls
 - **Entity Hierarchy** grouped by component type (Cameras, Materials, Scene, Managers)
 - **Inspector** with collapsible sections for every component
 - **Project Assets** browser with categorized asset listing
-- **Component Toolbox** for adding components to entities
-- **AI Chat** panel with scene-aware context
+- **Agent Discussion** panel with dual-tab interface — chat directly with specialist agents or use the Orchestrator to coordinate multi-agent workflows
+- **AI Chat** modal with scene-aware context
 - **Build & Run** system generating deployable SPM projects
 
 ### Visual Style

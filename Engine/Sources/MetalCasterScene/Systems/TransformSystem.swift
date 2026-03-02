@@ -7,7 +7,7 @@ import MetalCasterCore
 /// Traverses the entity hierarchy and multiplies parent world matrices
 /// with child local matrices to produce final world-space transforms.
 public final class TransformSystem: System {
-    public var isEnabled: Bool = true
+    public nonisolated(unsafe) var isEnabled: Bool = true
     public var priority: Int { -100 }
     
     public init() {}

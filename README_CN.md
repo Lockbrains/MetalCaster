@@ -28,6 +28,8 @@ AI 不是插件 —— 它是用户构建游戏的主要方式。每个子系统
 
 所有内部数据结构（ECS World、SceneGraph、Components）都可被 AI 通过结构化上下文内省。MCP（Model Context Protocol）兼容性是外部 AI 工具集成的长期目标。
 
+详见 [AI Agent 系统文档](AI_AGENTS_CN.md)，了解完整的 Agent 架构、工具集和 Orchestrator 协议。
+
 ### 3. Apple 生态，别无他选
 
 目标平台：**iOS、macOS、tvOS、visionOS**。永远不会考虑其他平台。
@@ -92,7 +94,7 @@ MetalCaster/
 | **MetalCasterInput** | 抽象输入动作与设备绑定、visionOS 手势追踪支持 |
 | **MetalCasterPhysics** | 物理体/碰撞体组件、基础重力和碰撞系统 |
 | **MetalCasterAudio** | 音频源组件、AVAudioEngine 封装与 3D 空间音频 |
-| **MetalCasterAI** | 多提供商 AI 服务（OpenAI、Anthropic、Gemini）、场景感知对话 |
+| **MetalCasterAI** | 多提供商 AI 服务（OpenAI、Anthropic、Gemini）、6 个专职 Agent（含工具调用）、Orchestrator 多 Agent 协调 |
 
 ---
 
@@ -108,19 +110,18 @@ Metal Caster 编辑器是一个 macOS 应用，采用 3×2 面板布局：
 │                  │                  │                  │
 ├──────────────────┼──────────────────┼──────────────────┤
 │                  │                  │                  │
-│     视口         │     项目         │     组件         │
-│   摄像机 02      │     资产         │     工具箱       │
+│     视口         │     项目         │     Agent        │
+│   摄像机 02      │     资产         │    Discussion    │
 │                  │                  │                  │
 └──────────────────┴──────────────────┴──────────────────┘
-  场景预览 | 后处理 | 场景热力图 | 场景图
 ```
 
 - **双 3D 视口**，独立摄像机控制
 - **实体层级**按组件类型分组（Cameras、Materials、Scene、Managers）
 - **检视器**为每个组件提供可折叠的编辑面板
 - **项目资产**浏览器，分类列表
-- **组件工具箱**，点击添加组件到实体
-- **AI 聊天**面板，具备场景上下文感知
+- **Agent Discussion** 面板，双 Tab 界面 — 直接与专职 Agent 对话，或通过 Orchestrator 协调多 Agent 工作流
+- **AI 聊天**弹窗，具备场景上下文感知
 - **构建与运行**系统，生成可部署的 SPM 项目
 
 ### 视觉风格

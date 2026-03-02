@@ -7,7 +7,24 @@ public actor AIService {
 
     private let session = URLSession.shared
 
-    // MARK: - Public API
+    // MARK: - Agent Tool Chat
+
+    /// General-purpose LLM call for the agent system. Sends conversation messages
+    /// with a custom system prompt and returns the raw LLM text response.
+    /// The caller (MCAgent) is responsible for parsing tool calls from the response.
+    public func agentToolChat(
+        messages: [ChatMessage],
+        systemPrompt: String,
+        settings: AISettings
+    ) async throws -> String {
+        switch settings.selectedProvider {
+        case .openai:   return try await callOpenAI(system: systemPrompt, messages: messages, settings: settings)
+        case .anthropic: return try await callAnthropic(system: systemPrompt, messages: messages, settings: settings)
+        case .gemini:   return try await callGemini(system: systemPrompt, messages: messages, settings: settings)
+        }
+    }
+
+    // MARK: - Legacy Shader Agent Chat
 
     public func agentChat(messages: [ChatMessage], context: String, dataFlowDescription: String, settings: AISettings) async throws -> AgentResponse {
         let systemPrompt = """

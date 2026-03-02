@@ -22,11 +22,11 @@ public struct DrawCall: Sendable {
 
 /// Queries entities with Transform + Mesh + Material and produces draw calls.
 public final class MeshRenderSystem: System {
-    public var isEnabled: Bool = true
+    public nonisolated(unsafe) var isEnabled: Bool = true
     public var priority: Int { 0 }
     
     /// Draw calls for the current frame, consumed by the renderer.
-    public private(set) var drawCalls: [DrawCall] = []
+    public nonisolated(unsafe) var drawCalls: [DrawCall] = []
     
     public init() {}
     

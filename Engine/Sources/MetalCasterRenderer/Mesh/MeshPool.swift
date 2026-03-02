@@ -97,6 +97,10 @@ public final class MeshPool {
             } else {
                 return mesh(for: .sphere)
             }
+        case .asset:
+            // .asset(UUID) must be resolved to a URL before calling mesh(for:).
+            // Use resolveAssetMeshType(_:) to convert to .custom(URL) first.
+            return mesh(for: .sphere)
         }
 
         guard let mdl = mdlMesh else { return nil }
@@ -104,11 +108,21 @@ public final class MeshPool {
         return try? MTKMesh(mesh: mdl, device: device)
     }
 
+    /// Resolves a `.asset(UUID)` mesh type to `.custom(URL)` using an external resolver.
+    /// Pass a closure that maps a UUID to a file URL (typically from AssetDatabase).
+    public func resolveAssetMeshType(_ type: MeshType, resolver: (UUID) -> URL?) -> MeshType {
+        if case .asset(let guid) = type, let url = resolver(guid) {
+            return .custom(url)
+        }
+        return type
+    }
+
     private func cacheKey(for type: MeshType) -> String {
         switch type {
         case .sphere: return "builtin:sphere"
         case .cube: return "builtin:cube"
         case .custom(let url): return "custom:\(url.path)"
+        case .asset(let guid): return "asset:\(guid.uuidString)"
         }
     }
 }

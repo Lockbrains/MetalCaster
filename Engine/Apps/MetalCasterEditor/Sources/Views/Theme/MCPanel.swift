@@ -34,3 +34,25 @@ struct MCPanel<Content: View>: View {
         .padding(.vertical, 6)
     }
 }
+
+struct MCPanelCustomTitle<Content: View, Title: View>: View {
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let title: () -> Title
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            title()
+                .padding(.horizontal, MCTheme.panelPadding)
+                .padding(.vertical, 6)
+        }
+        .background(MCTheme.panelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: MCTheme.panelCornerRadius))
+        .overlay(
+            RoundedRectangle(cornerRadius: MCTheme.panelCornerRadius)
+                .stroke(MCTheme.panelBorder, lineWidth: MCTheme.panelBorderWidth)
+        )
+    }
+}

@@ -27,9 +27,11 @@ public enum MeshType: Equatable, Codable, Sendable {
     case sphere
     case cube
     case custom(URL)
+    /// References a mesh asset by its project GUID, resolved at load time via AssetDatabase.
+    case asset(UUID)
 
     private enum CodingKeys: String, CodingKey {
-        case type, path
+        case type, path, guid
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -42,6 +44,9 @@ public enum MeshType: Equatable, Codable, Sendable {
         case .custom(let url):
             try container.encode("custom", forKey: .type)
             try container.encode(url.path, forKey: .path)
+        case .asset(let guid):
+            try container.encode("asset", forKey: .type)
+            try container.encode(guid.uuidString, forKey: .guid)
         }
     }
 
@@ -56,6 +61,13 @@ public enum MeshType: Equatable, Codable, Sendable {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: path) {
                 self = .custom(url)
+            } else {
+                self = .sphere
+            }
+        case "asset":
+            let guidString = try container.decode(String.self, forKey: .guid)
+            if let guid = UUID(uuidString: guidString) {
+                self = .asset(guid)
             } else {
                 self = .sphere
             }

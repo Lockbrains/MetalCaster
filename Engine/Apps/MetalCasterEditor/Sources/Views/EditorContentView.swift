@@ -5,6 +5,7 @@ import MetalCasterScene
 
 struct EditorContentView: View {
     @Environment(EditorState.self) private var state
+    @State private var agentTab = 0
 
     var body: some View {
         VSplitView {
@@ -34,10 +35,12 @@ struct EditorContentView: View {
                 MCPanel(titleNormal: "Project", titleBold: "Assets") {
                     ProjectAssetsView()
                 }
-                .frame(minWidth: 180, idealWidth: 240, maxWidth: 400)
+                .frame(minWidth: 280, idealWidth: 380, maxWidth: 600)
 
-                MCPanel(titleNormal: "Component", titleBold: "Toolboxes") {
-                    ComponentToolboxView()
+                MCPanelCustomTitle {
+                    AgentDiscussionView(selectedTab: $agentTab)
+                } title: {
+                    agentPanelTitle
                 }
                 .frame(minWidth: 200, idealWidth: 280, maxWidth: 420)
             }
@@ -85,6 +88,26 @@ struct EditorContentView: View {
             BuildPanelView()
                 .environment(state)
                 .frame(width: 500, height: 420)
+        }
+    }
+
+    private var agentPanelTitle: some View {
+        HStack(spacing: 4) {
+            Button { agentTab = 0 } label: {
+                Text("Agent")
+                    .font(agentTab == 0 ? MCTheme.fontPanelLabelBold : MCTheme.fontPanelLabel)
+                    .foregroundStyle(agentTab == 0 ? MCTheme.textPrimary : MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+
+            Button { agentTab = 1 } label: {
+                Text("Colab")
+                    .font(agentTab == 1 ? MCTheme.fontPanelLabelBold : MCTheme.fontPanelLabel)
+                    .foregroundStyle(agentTab == 1 ? MCTheme.textPrimary : MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
         }
     }
 }

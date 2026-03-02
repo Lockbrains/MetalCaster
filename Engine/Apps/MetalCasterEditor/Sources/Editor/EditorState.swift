@@ -20,6 +20,7 @@ public final class EditorState {
     public let sceneGraph: SceneGraph
     public let assetManager = AssetManager()
     public let projectManager = ProjectManager()
+    public let assetDatabase: AssetDatabase
     public let usdImporter = USDImporter()
     public let usdExporter = USDExporter()
     public let sceneSerializer = SceneSerializer()
@@ -45,6 +46,25 @@ public final class EditorState {
         body(&comp)
         engine.world.addComponent(comp, to: entity)
         worldRevision += 1
+        markDirty()
+    }
+
+    /// Marks the current scene as having unsaved changes.
+    public func markDirty() {
+        isSceneDirty = true
+        scheduleAutoSave()
+    }
+
+    private var autoSaveTask: DispatchWorkItem?
+
+    private func scheduleAutoSave() {
+        autoSaveTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            self?.saveScene()
+            self?.isSceneDirty = false
+        }
+        autoSaveTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: task)
     }
 
     // MARK: - Undo/Redo
@@ -60,6 +80,22 @@ public final class EditorState {
     public var showAIChat = false
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
+    public var isSceneDirty: Bool = false
+
+    // MARK: - Asset Browser State
+
+    public var selectedAssetCategory: AssetCategory = .scenes
+    public var assetBrowserSubfolder: String? = nil
+    public var assetBrowserSearchQuery: String = ""
+    public var selectedAssetEntry: AssetEntry? = nil
+    public var assetViewMode: AssetViewMode = .list
+    /// Incremented to force SwiftUI to re-read asset entries from disk.
+    public var assetBrowserRevision: Int = 0
+
+    public enum AssetViewMode: String, CaseIterable {
+        case list = "List"
+        case grid = "Grid"
+    }
 
     // MARK: - Build System
 
@@ -71,6 +107,12 @@ public final class EditorState {
 
     public let aiSettings = AISettings()
     public var chatMessages: [ChatMessage] = []
+
+    // MARK: - Agent System
+
+    public let agentRegistry = AgentRegistry()
+    public let orchestrator: AgentOrchestrator
+    private(set) var engineAPI: EditorEngineAPI!
 
     // MARK: - Scene Editor Tool Mode (QWER)
 
@@ -178,8 +220,11 @@ public final class EditorState {
 
     // MARK: - Init
 
-    public init() {
+    /// Opens an existing project or initializes at the given URL.
+    public init(projectURL: URL) {
         self.sceneGraph = SceneGraph(world: engine.world)
+        self.orchestrator = AgentOrchestrator(registry: agentRegistry)
+        self.assetDatabase = AssetDatabase(projectManager: projectManager)
 
         engine.addSystem(transformSystem)
         engine.addSystem(cameraSystem)
@@ -189,17 +234,26 @@ public final class EditorState {
         setupDefaultScene()
         engine.start()
 
-        initializeProject()
+        initializeProject(at: projectURL)
         tryLoadLastScene()
+
+        setupAgentSystem()
     }
 
-    private func initializeProject() {
-        let projectURL = Self.projectDirectory
+    private func setupAgentSystem() {
+        agentRegistry.registerBuiltinAgents()
+        let api = EditorEngineAPI(state: self)
+        self.engineAPI = api
+        orchestrator.setEngineAPI(api)
+    }
+
+    private func initializeProject(at projectURL: URL) {
         let configPath = projectURL.appendingPathComponent("project.json").path
         if FileManager.default.fileExists(atPath: configPath) {
             try? projectManager.openProject(at: projectURL)
         } else {
-            try? projectManager.createProject(at: projectURL, name: "Default Project")
+            let name = projectURL.deletingPathExtension().lastPathComponent
+            try? projectManager.createProject(at: projectURL, name: name)
         }
     }
 
@@ -330,24 +384,19 @@ public final class EditorState {
 
     // MARK: - Scene IO
 
-    public static let projectDirectory: URL = {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("MetalCaster", isDirectory: true)
-    }()
+    private var scenesDirectory: URL? {
+        projectManager.scenesDirectory()
+    }
 
-    public static let scenesDirectory: URL = {
-        projectDirectory.appendingPathComponent("Scenes", isDirectory: true)
-    }()
-
-    public static let defaultSceneURL: URL = {
-        scenesDirectory.appendingPathComponent("default.mcscene")
-    }()
+    private var defaultSceneURL: URL? {
+        scenesDirectory?.appendingPathComponent("default.mcscene")
+    }
 
     private static let lastOpenedSceneKey = "MetalCaster.lastOpenedScene"
 
     private func ensureDirectories() {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: Self.scenesDirectory, withIntermediateDirectories: true)
+        guard let scenesDir = scenesDirectory else { return }
+        try? FileManager.default.createDirectory(at: scenesDir, withIntermediateDirectories: true)
     }
 
     public func newScene() {
@@ -355,6 +404,7 @@ public final class EditorState {
         selectedEntity = nil
         currentFileURL = nil
         sceneName = "Untitled Scene"
+        isSceneDirty = false
         setupDefaultScene()
         worldRevision += 1
     }
@@ -362,9 +412,9 @@ public final class EditorState {
     public func saveScene() {
         if let url = currentFileURL {
             saveScene(to: url)
-        } else {
+        } else if let defaultURL = defaultSceneURL {
             ensureDirectories()
-            saveScene(to: Self.defaultSceneURL)
+            saveScene(to: defaultURL)
         }
     }
 
@@ -375,6 +425,7 @@ public final class EditorState {
             try data.write(to: url)
             currentFileURL = url
             sceneName = url.deletingPathExtension().lastPathComponent
+            isSceneDirty = false
             UserDefaults.standard.set(url.path, forKey: Self.lastOpenedSceneKey)
         } catch {
             print("[MetalCaster] Failed to save scene: \(error)")
@@ -387,7 +438,7 @@ public final class EditorState {
         panel.title = "Save Scene"
         panel.nameFieldStringValue = sceneName + ".mcscene"
         panel.allowedContentTypes = [.json]
-        panel.directoryURL = Self.scenesDirectory
+        panel.directoryURL = scenesDirectory
         panel.begin { response in
             if response == .OK, let url = panel.url {
                 self.saveScene(to: url)
@@ -411,6 +462,16 @@ public final class EditorState {
     }
 
     public func tryLoadLastScene() {
+        if let snapshot = projectManager.config?.editorSnapshot,
+           let lastScene = snapshot.lastOpenScene,
+           let root = projectManager.projectRoot {
+            let url = root.appendingPathComponent(lastScene)
+            if FileManager.default.fileExists(atPath: url.path) {
+                loadScene(from: url)
+                return
+            }
+        }
+
         if let path = UserDefaults.standard.string(forKey: Self.lastOpenedSceneKey) {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: url.path) {
@@ -418,14 +479,77 @@ public final class EditorState {
                 return
             }
         }
-        if FileManager.default.fileExists(atPath: Self.defaultSceneURL.path) {
-            loadScene(from: Self.defaultSceneURL)
+
+        if let defaultURL = defaultSceneURL,
+           FileManager.default.fileExists(atPath: defaultURL.path) {
+            loadScene(from: defaultURL)
         }
     }
 
     public func importUSD(from url: URL) {
         usdImporter.importAsset(from: url, into: engine.world, sceneGraph: sceneGraph)
         worldRevision += 1
+        markDirty()
+    }
+
+    /// Forces the asset browser to re-read from disk.
+    public func refreshAssetBrowser() {
+        assetBrowserRevision += 1
+    }
+
+    /// Imports a file into the project via AssetDatabase.
+    public func importAssetFile(from url: URL) {
+        do {
+            let entry = try assetDatabase.importAsset(from: url)
+            selectedAssetCategory = entry.category
+            selectedAssetEntry = entry
+            assetBrowserSubfolder = nil
+            refreshAssetBrowser()
+        } catch {
+            print("[MetalCaster] Failed to import asset: \(error)")
+        }
+    }
+
+    /// Navigates the asset browser into a subfolder.
+    public func enterAssetSubfolder(_ name: String) {
+        if let current = assetBrowserSubfolder {
+            assetBrowserSubfolder = current + "/" + name
+        } else {
+            assetBrowserSubfolder = name
+        }
+    }
+
+    /// Navigates the asset browser up one level.
+    public func exitAssetSubfolder() {
+        guard let current = assetBrowserSubfolder else { return }
+        if let lastSlash = current.lastIndex(of: "/") {
+            assetBrowserSubfolder = String(current[current.startIndex..<lastSlash])
+        } else {
+            assetBrowserSubfolder = nil
+        }
+    }
+
+    /// Returns breadcrumb path components for the current asset browser location.
+    public var assetBreadcrumbs: [String] {
+        var crumbs = [selectedAssetCategory.directoryName]
+        if let sub = assetBrowserSubfolder {
+            crumbs.append(contentsOf: sub.split(separator: "/").map(String.init))
+        }
+        return crumbs
+    }
+
+    /// Saves editor snapshot to project config on shutdown.
+    public func saveEditorSnapshot() {
+        var snapshot = ProjectManager.EditorSnapshot()
+        if let url = currentFileURL, let root = projectManager.projectRoot {
+            let relPath = projectManager.relativePath(for: url, from: root)
+            snapshot.lastOpenScene = relPath
+        }
+        snapshot.selectedEntityID = selectedEntity?.id
+        snapshot.cameraYaw = cameraOrbitYaw
+        snapshot.cameraPitch = cameraOrbitPitch
+        snapshot.cameraDistance = cameraOrbitDistance
+        projectManager.updateEditorSnapshot(snapshot)
     }
 
     public func exportUSD(to url: URL) {

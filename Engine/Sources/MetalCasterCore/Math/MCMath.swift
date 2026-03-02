@@ -189,3 +189,24 @@ public func quaternionFromEuler(_ euler: SIMD3<Float>) -> simd_quatf {
     let qz = simd_quatf(angle: euler.z, axis: SIMD3<Float>(0, 0, 1))
     return qy * qx * qz
 }
+
+/// Extracts Euler angles (in radians) from a quaternion, using YXZ decomposition.
+/// Returns (pitch, yaw, roll) as SIMD3<Float>.
+public func eulerFromQuaternion(_ q: simd_quatf) -> SIMD3<Float> {
+    let m = simd_float3x3(q)
+    let sinP = -m[1][2]
+    let pitch: Float
+    let yaw: Float
+    let roll: Float
+
+    if abs(sinP) >= 0.9999 {
+        pitch = copysign(Float.pi / 2, sinP)
+        yaw = atan2(-m[2][0], m[0][0])
+        roll = 0
+    } else {
+        pitch = asin(sinP)
+        yaw = atan2(m[0][2], m[2][2])
+        roll = atan2(m[1][0], m[1][1])
+    }
+    return SIMD3<Float>(pitch, yaw, roll)
+}

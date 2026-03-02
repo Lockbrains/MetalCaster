@@ -5,16 +5,15 @@ import MetalCasterCore
 ///
 /// Project layout:
 /// ```
-/// MyProject.mcproject/
+/// MyGame.mcproject/
 /// ├── project.json           (ProjectConfig)
 /// ├── Scenes/
-/// │   ├── default.mcscene
-/// │   └── default.mcscene.meta
-/// ├── Assets/
-/// │   ├── Meshes/
-/// │   │   ├── model.usdz
-/// │   │   └── model.usdz.meta
-/// │   └── Textures/
+/// ├── Meshes/
+/// ├── Textures/
+/// ├── Materials/
+/// ├── Shaders/
+/// ├── Audio/
+/// ├── Prefabs/
 /// └── Library/               (cached/compiled data, not versioned)
 /// ```
 public final class ProjectManager: @unchecked Sendable {
@@ -28,6 +27,8 @@ public final class ProjectManager: @unchecked Sendable {
         public var defaultScene: String = "Scenes/default.mcscene"
         public var createdAt: Date
         public var modifiedAt: Date
+        public var buildSettings: BuildSettings?
+        public var editorSnapshot: EditorSnapshot?
 
         public init(name: String) {
             self.name = name
@@ -37,24 +38,41 @@ public final class ProjectManager: @unchecked Sendable {
         }
     }
 
+    public struct BuildSettings: Codable {
+        public var targetPlatforms: [String]
+        public var optimizationLevel: String
+        public var bundleIdentifier: String
+
+        public init(
+            targetPlatforms: [String] = ["macOS"],
+            optimizationLevel: String = "debug",
+            bundleIdentifier: String = "com.metalcaster.project"
+        ) {
+            self.targetPlatforms = targetPlatforms
+            self.optimizationLevel = optimizationLevel
+            self.bundleIdentifier = bundleIdentifier
+        }
+    }
+
+    public struct EditorSnapshot: Codable {
+        public var lastOpenScene: String?
+        public var selectedEntityID: UInt64?
+        public var cameraYaw: Float?
+        public var cameraPitch: Float?
+        public var cameraDistance: Float?
+
+        public init() {}
+    }
+
     public struct AssetMeta: Codable {
         public let guid: UUID
-        public var assetType: AssetType
+        public var assetType: AssetCategory
         public var importSettings: [String: String]
 
-        public init(assetType: AssetType, importSettings: [String: String] = [:]) {
+        public init(assetType: AssetCategory, importSettings: [String: String] = [:]) {
             self.guid = UUID()
             self.assetType = assetType
             self.importSettings = importSettings
-        }
-
-        public enum AssetType: String, Codable {
-            case mesh
-            case texture
-            case scene
-            case shader
-            case audio
-            case other
         }
     }
 
@@ -63,7 +81,7 @@ public final class ProjectManager: @unchecked Sendable {
     public private(set) var projectRoot: URL?
     public private(set) var config: ProjectConfig?
 
-    /// GUID → relative asset path mapping (built from scanning .meta files)
+    /// GUID -> relative asset path mapping (built from scanning .meta files)
     private var guidToPath: [UUID: String] = [:]
     private var pathToGuid: [String: UUID] = [:]
 
@@ -88,13 +106,23 @@ public final class ProjectManager: @unchecked Sendable {
         let fm = FileManager.default
         try fm.createDirectory(at: url, withIntermediateDirectories: true)
 
-        let subdirs = ["Scenes", "Assets/Meshes", "Assets/Textures", "Assets/Shaders", "Assets/Audio", "Library"]
+        var subdirs = AssetCategory.allCases.map(\.directoryName)
+        subdirs.append("Library")
+        subdirs.append("Library/TextureCache")
+        subdirs.append("Library/MeshCache")
+        subdirs.append("Library/ShaderCache")
+        subdirs.append("Library/Thumbnails")
+
         for sub in subdirs {
-            try fm.createDirectory(at: url.appendingPathComponent(sub), withIntermediateDirectories: true)
+            try fm.createDirectory(
+                at: url.appendingPathComponent(sub),
+                withIntermediateDirectories: true
+            )
         }
 
         var cfg = ProjectConfig(name: name)
         cfg.modifiedAt = Date()
+        cfg.buildSettings = BuildSettings()
         let data = try encoder.encode(cfg)
         try data.write(to: url.appendingPathComponent("project.json"))
 
@@ -110,6 +138,8 @@ public final class ProjectManager: @unchecked Sendable {
         let data = try Data(contentsOf: configURL)
         config = try decoder.decode(ProjectConfig.self, from: data)
         projectRoot = url
+
+        ensureCategoryDirectories()
         scanMetafiles()
     }
 
@@ -121,9 +151,43 @@ public final class ProjectManager: @unchecked Sendable {
         try data.write(to: root.appendingPathComponent("project.json"))
     }
 
+    public func updateEditorSnapshot(_ snapshot: EditorSnapshot) {
+        config?.editorSnapshot = snapshot
+        try? saveConfig()
+    }
+
+    // MARK: - Directory Access
+
+    public func directoryURL(for category: AssetCategory) -> URL? {
+        projectRoot?.appendingPathComponent(category.directoryName)
+    }
+
+    public func libraryDirectory() -> URL? {
+        projectRoot?.appendingPathComponent("Library")
+    }
+
+    public func scenesDirectory() -> URL? {
+        directoryURL(for: .scenes)
+    }
+
+    /// Creates a subfolder within a category directory.
+    @discardableResult
+    public func createSubfolder(named name: String, in category: AssetCategory, parentSubpath: String? = nil) throws -> URL {
+        guard let categoryDir = directoryURL(for: category) else {
+            throw ProjectError.noProjectOpen
+        }
+        var target = categoryDir
+        if let sub = parentSubpath, !sub.isEmpty {
+            target = target.appendingPathComponent(sub)
+        }
+        target = target.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        return target
+    }
+
     // MARK: - Asset Metafiles
 
-    public func ensureMeta(for assetRelativePath: String, type: AssetMeta.AssetType) -> UUID {
+    public func ensureMeta(for assetRelativePath: String, type: AssetCategory) -> UUID {
         if let existing = pathToGuid[assetRelativePath] {
             return existing
         }
@@ -156,6 +220,159 @@ public final class ProjectManager: @unchecked Sendable {
         guidToPath[guid]
     }
 
+    public func allRegisteredGUIDs() -> [UUID: String] {
+        guidToPath
+    }
+
+    // MARK: - Asset Listing
+
+    /// Lists files and subfolders within a category directory.
+    public func listContents(
+        in category: AssetCategory,
+        subfolder: String? = nil
+    ) -> (folders: [String], files: [URL]) {
+        guard let categoryDir = directoryURL(for: category) else { return ([], []) }
+
+        var targetDir = categoryDir
+        if let sub = subfolder, !sub.isEmpty {
+            targetDir = targetDir.appendingPathComponent(sub)
+        }
+
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: targetDir,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return ([], []) }
+
+        var folders: [String] = []
+        var files: [URL] = []
+
+        for url in contents {
+            if url.pathExtension == "meta" { continue }
+
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            if isDir {
+                folders.append(url.lastPathComponent)
+            } else {
+                let ext = url.pathExtension.lowercased()
+                if category.acceptedExtensions.contains(ext) {
+                    files.append(url)
+                }
+            }
+        }
+
+        folders.sort()
+        files.sort { $0.lastPathComponent.localizedCompare($1.lastPathComponent) == .orderedAscending }
+        return (folders, files)
+    }
+
+    /// Returns the count of assets (files only, recursive) in a category.
+    public func assetCount(in category: AssetCategory) -> Int {
+        guard let categoryDir = directoryURL(for: category) else { return 0 }
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: categoryDir,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var count = 0
+        for case let fileURL as URL in enumerator {
+            let ext = fileURL.pathExtension.lowercased()
+            if ext == "meta" { continue }
+            if category.acceptedExtensions.contains(ext) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    // MARK: - Asset Import
+
+    /// Copies a file into the project under the correct category.
+    @discardableResult
+    public func importFile(
+        from sourceURL: URL,
+        to category: AssetCategory,
+        subfolder: String? = nil
+    ) throws -> (url: URL, guid: UUID) {
+        guard let categoryDir = directoryURL(for: category) else {
+            throw ProjectError.noProjectOpen
+        }
+
+        var targetDir = categoryDir
+        if let sub = subfolder, !sub.isEmpty {
+            targetDir = targetDir.appendingPathComponent(sub)
+            try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        }
+
+        var destinationURL = targetDir.appendingPathComponent(sourceURL.lastPathComponent)
+
+        // Avoid overwriting by appending a number
+        let fm = FileManager.default
+        if fm.fileExists(atPath: destinationURL.path) {
+            let stem = sourceURL.deletingPathExtension().lastPathComponent
+            let ext = sourceURL.pathExtension
+            var counter = 1
+            repeat {
+                let newName = "\(stem)_\(counter).\(ext)"
+                destinationURL = targetDir.appendingPathComponent(newName)
+                counter += 1
+            } while fm.fileExists(atPath: destinationURL.path)
+        }
+
+        try fm.copyItem(at: sourceURL, to: destinationURL)
+
+        guard let root = projectRoot else {
+            throw ProjectError.noProjectOpen
+        }
+        let relativePath = self.relativePath(for: destinationURL, from: root) ?? destinationURL.lastPathComponent
+        let guid = ensureMeta(for: relativePath, type: category)
+
+        return (destinationURL, guid)
+    }
+
+    /// Deletes an asset file and its .meta sidecar.
+    public func deleteAsset(relativePath: String) throws {
+        guard let root = projectRoot else { throw ProjectError.noProjectOpen }
+        let fileURL = root.appendingPathComponent(relativePath)
+        let metaURL = URL(fileURLWithPath: fileURL.path + ".meta")
+        let fm = FileManager.default
+
+        if let guid = pathToGuid[relativePath] {
+            guidToPath.removeValue(forKey: guid)
+        }
+        pathToGuid.removeValue(forKey: relativePath)
+
+        try? fm.removeItem(at: metaURL)
+        try fm.removeItem(at: fileURL)
+    }
+
+    /// Renames an asset file and updates its .meta mapping.
+    public func renameAsset(relativePath: String, newName: String) throws -> String {
+        guard let root = projectRoot else { throw ProjectError.noProjectOpen }
+        let oldURL = root.appendingPathComponent(relativePath)
+        let newURL = oldURL.deletingLastPathComponent().appendingPathComponent(newName)
+        let fm = FileManager.default
+
+        let oldMetaURL = URL(fileURLWithPath: oldURL.path + ".meta")
+        let newMetaURL = URL(fileURLWithPath: newURL.path + ".meta")
+
+        try fm.moveItem(at: oldURL, to: newURL)
+        if fm.fileExists(atPath: oldMetaURL.path) {
+            try fm.moveItem(at: oldMetaURL, to: newMetaURL)
+        }
+
+        let newRelativePath = self.relativePath(for: newURL, from: root) ?? newName
+        if let guid = pathToGuid.removeValue(forKey: relativePath) {
+            guidToPath[guid] = newRelativePath
+            pathToGuid[newRelativePath] = guid
+        }
+
+        return newRelativePath
+    }
+
     // MARK: - Scanning
 
     public func scanMetafiles() {
@@ -164,41 +381,98 @@ public final class ProjectManager: @unchecked Sendable {
         guard let root = projectRoot else { return }
 
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: nil,
-                                              options: [.skipsHiddenFiles]) else { return }
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return }
 
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension == "meta" else { continue }
             if let meta = readMeta(at: fileURL) {
-                let assetPath = String(fileURL.path.dropLast(5))
-                if let relativePath = relativePath(for: URL(fileURLWithPath: assetPath), from: root) {
-                    register(guid: meta.guid, path: relativePath)
+                let assetPath = String(fileURL.path.dropLast(5)) // drop ".meta"
+                if let relPath = relativePath(for: URL(fileURLWithPath: assetPath), from: root) {
+                    register(guid: meta.guid, path: relPath)
                 }
             }
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Search
 
-    public func scenesDirectory() -> URL? {
-        projectRoot?.appendingPathComponent("Scenes")
+    /// Searches across all categories (or a specific one) for assets matching a query.
+    public func searchAssets(query: String, category: AssetCategory? = nil) -> [(relativePath: String, guid: UUID?)] {
+        guard projectRoot != nil else { return [] }
+        let lowerQuery = query.lowercased()
+        let categories = category.map { [$0] } ?? AssetCategory.allCases
+
+        var results: [(String, UUID?)] = []
+        for cat in categories {
+            let (folders, files) = listContents(in: cat)
+            for file in files {
+                if file.lastPathComponent.lowercased().contains(lowerQuery) {
+                    let relPath = "\(cat.directoryName)/\(file.lastPathComponent)"
+                    results.append((relPath, pathToGuid[relPath]))
+                }
+            }
+            for folder in folders {
+                searchRecursive(
+                    category: cat,
+                    subfolder: folder,
+                    query: lowerQuery,
+                    results: &results
+                )
+            }
+        }
+        return results
     }
 
-    public func assetsDirectory() -> URL? {
-        projectRoot?.appendingPathComponent("Assets")
+    private func searchRecursive(
+        category: AssetCategory,
+        subfolder: String,
+        query: String,
+        results: inout [(String, UUID?)]
+    ) {
+        let (folders, files) = listContents(in: category, subfolder: subfolder)
+        for file in files {
+            if file.lastPathComponent.lowercased().contains(query) {
+                let relPath = "\(category.directoryName)/\(subfolder)/\(file.lastPathComponent)"
+                results.append((relPath, pathToGuid[relPath]))
+            }
+        }
+        for folder in folders {
+            searchRecursive(
+                category: category,
+                subfolder: "\(subfolder)/\(folder)",
+                query: query,
+                results: &results
+            )
+        }
     }
 
-    public static func detectAssetType(extension ext: String) -> AssetMeta.AssetType {
-        let lower = ext.lowercased()
-        if AssetManager.meshExtensions.contains(lower) { return .mesh }
-        if AssetManager.textureExtensions.contains(lower) { return .texture }
-        if AssetManager.sceneExtensions.contains(lower) { return .scene }
-        if lower == "metal" || lower == "msl" { return .shader }
-        if ["wav", "mp3", "aac", "ogg", "m4a"].contains(lower) { return .audio }
-        return .other
+    // MARK: - Helpers (Public)
+
+    public static func detectCategory(forExtension ext: String) -> AssetCategory? {
+        AssetCategory.category(for: ext)
     }
 
     // MARK: - Private
+
+    private func ensureCategoryDirectories() {
+        guard let root = projectRoot else { return }
+        let fm = FileManager.default
+        for cat in AssetCategory.allCases {
+            let dir = root.appendingPathComponent(cat.directoryName)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let libraryDirs = ["Library", "Library/TextureCache", "Library/MeshCache", "Library/ShaderCache", "Library/Thumbnails"]
+        for dir in libraryDirs {
+            try? fm.createDirectory(
+                at: root.appendingPathComponent(dir),
+                withIntermediateDirectories: true
+            )
+        }
+    }
 
     private func register(guid: UUID, path: String) {
         guidToPath[guid] = path
@@ -215,7 +489,7 @@ public final class ProjectManager: @unchecked Sendable {
         try? data.write(to: url)
     }
 
-    private func relativePath(for url: URL, from base: URL) -> String? {
+    public func relativePath(for url: URL, from base: URL) -> String? {
         let filePath = url.standardizedFileURL.path
         let basePath = base.standardizedFileURL.path + "/"
         guard filePath.hasPrefix(basePath) else { return nil }
@@ -226,6 +500,7 @@ public final class ProjectManager: @unchecked Sendable {
 public enum ProjectError: LocalizedError {
     case notAProject(URL)
     case missingAsset(UUID)
+    case noProjectOpen
 
     public var errorDescription: String? {
         switch self {
@@ -233,6 +508,8 @@ public enum ProjectError: LocalizedError {
             return "Not a MetalCaster project: \(url.lastPathComponent)"
         case .missingAsset(let guid):
             return "Asset not found: \(guid)"
+        case .noProjectOpen:
+            return "No project is currently open"
         }
     }
 }

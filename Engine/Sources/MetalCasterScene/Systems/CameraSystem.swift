@@ -8,20 +8,20 @@ import MetalCasterRenderer
 /// Reads TransformComponent + CameraComponent to produce matrices
 /// that are consumed by the rendering pipeline.
 public final class CameraSystem: System {
-    public var isEnabled: Bool = true
+    public nonisolated(unsafe) var isEnabled: Bool = true
     public var priority: Int { -90 }
     
     /// The computed view matrix from the active camera.
-    public private(set) var viewMatrix: simd_float4x4 = matrix_identity_float4x4
+    public nonisolated(unsafe) var viewMatrix: simd_float4x4 = matrix_identity_float4x4
     
     /// The computed projection matrix from the active camera.
-    public private(set) var projectionMatrix: simd_float4x4 = matrix_identity_float4x4
+    public nonisolated(unsafe) var projectionMatrix: simd_float4x4 = matrix_identity_float4x4
     
     /// The active camera's world position.
-    public private(set) var cameraPosition: SIMD3<Float> = .zero
+    public nonisolated(unsafe) var cameraPosition: SIMD3<Float> = .zero
     
     /// The viewport aspect ratio (set externally by the renderer).
-    public var aspectRatio: Float = 16.0 / 9.0
+    public nonisolated(unsafe) var aspectRatio: Float = 16.0 / 9.0
     
     public init() {}
     

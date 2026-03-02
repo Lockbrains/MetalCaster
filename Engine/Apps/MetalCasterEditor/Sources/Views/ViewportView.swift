@@ -214,6 +214,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     var outlinePipeline: MTLRenderPipelineState?
     var gridRenderer: GridRenderer?
     var gizmoRenderer: GizmoRenderer?
+    var debugOverlayRenderer: DebugOverlayRenderer?
 
     var lastMouseLocation: NSPoint?
     var mouseDownPoint: NSPoint?
@@ -225,12 +226,14 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     var cachedViewSize: CGSize = .zero
 
     // Gizmo interaction state
-    var activeGizmoAxis: Int? = nil  // 0=X, 1=Y, 2=Z
+    var activeGizmoAxis: Int? = nil  // 0=X, 1=Y, 2=Z, 3=view-axis (rotate only)
     var gizmoDragStartPos: SIMD3<Float> = .zero
     var gizmoDragStartScale: SIMD3<Float> = .one
+    var gizmoDragStartRotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     var gizmoDragStartLocalPoint: CGPoint = .zero
     var gizmoScreenAxisDir: SIMD2<Float> = .zero
     var gizmoPixelsPerUnit: Float = 1.0
+    var gizmoEntityScreenCenter: SIMD2<Float> = .zero
 
     init(viewportID: Int, state: EditorState) {
         self.viewportID = viewportID
@@ -244,6 +247,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         shaderCompiler = ShaderCompiler(device: device)
         gridRenderer = GridRenderer(device: device)
         gizmoRenderer = GizmoRenderer(device: device)
+        debugOverlayRenderer = DebugOverlayRenderer(device: device)
 
         if viewportID == 0 {
             var wsConfig = DataFlowConfig()
@@ -338,17 +342,28 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         didDrag = true
         gizmoDragStartPos = tc.transform.position
         gizmoDragStartScale = tc.transform.scale
+        gizmoDragStartRotation = tc.transform.rotation
         gizmoDragStartLocalPoint = localPoint
 
-        let axisDir = gizmoAxisDirection(axis)
         let entityPos = SIMD3<Float>(tc.worldMatrix.columns.3.x, tc.worldMatrix.columns.3.y, tc.worldMatrix.columns.3.z)
         let vpMatrix = cachedProjMatrix * cachedViewMatrix
         let originScreen = worldToScreen(entityPos, vpMatrix: vpMatrix, viewSize: viewSize)
-        let unitScreen = worldToScreen(entityPos + axisDir, vpMatrix: vpMatrix, viewSize: viewSize)
-        let screenDelta = unitScreen - originScreen
-        let len = length(screenDelta)
-        gizmoPixelsPerUnit = max(len, 0.01)
-        gizmoScreenAxisDir = len > 0.001 ? screenDelta / len : SIMD2<Float>(1, 0)
+        gizmoEntityScreenCenter = originScreen
+
+        if state.sceneToolMode == .rotate {
+            gizmoPixelsPerUnit = 1.0
+            gizmoScreenAxisDir = .zero
+        } else if axis == 3 && state.sceneToolMode == .scale {
+            gizmoPixelsPerUnit = 1.0
+            gizmoScreenAxisDir = normalize(SIMD2<Float>(1, 1))
+        } else {
+            let axisDir = gizmoAxisDirection(axis)
+            let unitScreen = worldToScreen(entityPos + axisDir, vpMatrix: vpMatrix, viewSize: viewSize)
+            let screenDelta = unitScreen - originScreen
+            let len = length(screenDelta)
+            gizmoPixelsPerUnit = max(len, 0.01)
+            gizmoScreenAxisDir = len > 0.001 ? screenDelta / len : SIMD2<Float>(1, 0)
+        }
     }
 
     func handleLeftMouseDragged(with event: NSEvent) {
@@ -370,23 +385,63 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 Float(localPoint.x - gizmoDragStartLocalPoint.x),
                 Float(localPoint.y - gizmoDragStartLocalPoint.y)
             )
-            let projectedPixels = dot(mouseDelta, gizmoScreenAxisDir)
-            let worldDelta = projectedPixels / gizmoPixelsPerUnit
-            let axisDir = gizmoAxisDirection(axis)
 
             if let selected = state.selectedEntity {
                 let toolMode = state.sceneToolMode
                 if toolMode == .translate {
+                    let projectedPixels = dot(mouseDelta, gizmoScreenAxisDir)
+                    let worldDelta = projectedPixels / gizmoPixelsPerUnit
+                    let axisDir = gizmoAxisDirection(axis)
                     let newPos = gizmoDragStartPos + axisDir * worldDelta
                     state.updateComponent(TransformComponent.self, on: selected) { tc in
                         tc.transform.position = newPos
                     }
                 } else if toolMode == .scale {
-                    let scaleFactor: Float = 1.0 + worldDelta * 0.5
-                    var newScale = gizmoDragStartScale
-                    newScale[axis] = gizmoDragStartScale[axis] * max(0.01, scaleFactor)
+                    let projectedPixels = dot(mouseDelta, gizmoScreenAxisDir)
+                    if axis == 3 {
+                        let uniformFactor: Float = 1.0 + projectedPixels * 0.005
+                        let clamped = max(0.01, uniformFactor)
+                        let newScale = gizmoDragStartScale * clamped
+                        state.updateComponent(TransformComponent.self, on: selected) { tc in
+                            tc.transform.scale = newScale
+                        }
+                    } else {
+                        let worldDelta = projectedPixels / gizmoPixelsPerUnit
+                        let scaleFactor: Float = 1.0 + worldDelta * 0.5
+                        var newScale = gizmoDragStartScale
+                        newScale[axis] = gizmoDragStartScale[axis] * max(0.01, scaleFactor)
+                        state.updateComponent(TransformComponent.self, on: selected) { tc in
+                            tc.transform.scale = newScale
+                        }
+                    }
+                } else if toolMode == .rotate {
+                    let rotationAxis: SIMD3<Float>
+                    if axis == 3 {
+                        let yaw = state.cameraOrbitYaw
+                        let pitch = state.cameraOrbitPitch
+                        rotationAxis = SIMD3<Float>(
+                            cos(pitch) * sin(yaw),
+                            sin(pitch),
+                            cos(pitch) * cos(yaw)
+                        )
+                    } else {
+                        rotationAxis = gizmoAxisDirection(axis)
+                    }
+                    let currentPt = SIMD2<Float>(Float(localPoint.x), Float(localPoint.y))
+                    let startPt = SIMD2<Float>(Float(gizmoDragStartLocalPoint.x), Float(gizmoDragStartLocalPoint.y))
+                    let startVec = startPt - gizmoEntityScreenCenter
+                    let curVec = currentPt - gizmoEntityScreenCenter
+                    let startLen = length(startVec)
+                    let curLen = length(curVec)
+                    var angle: Float = 0
+                    if startLen > 2 && curLen > 2 {
+                        let cosA = dot(startVec, curVec) / (startLen * curLen)
+                        let crossZ = startVec.x * curVec.y - startVec.y * curVec.x
+                        angle = acos(min(1, max(-1, cosA))) * (crossZ >= 0 ? 1 : -1)
+                    }
+                    let deltaQuat = simd_quatf(angle: angle, axis: rotationAxis)
                     state.updateComponent(TransformComponent.self, on: selected) { tc in
-                        tc.transform.scale = newScale
+                        tc.transform.rotation = deltaQuat * gizmoDragStartRotation
                     }
                 }
             }
@@ -610,12 +665,17 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
               let tc = state.engine.world.getComponent(TransformComponent.self, from: selected) else { return nil }
 
         let entityPos = SIMD3<Float>(tc.worldMatrix.columns.3.x, tc.worldMatrix.columns.3.y, tc.worldMatrix.columns.3.z)
-        let dist = state.cameraOrbitDistance
-        let gizmoLen = dist * 0.18 * 1.18  // shaft + arrowhead
+        let camDist = state.cameraOrbitDistance
         let vpMatrix = cachedProjMatrix * cachedViewMatrix
+        let clickPt = SIMD2<Float>(Float(screenPoint.x), Float(screenPoint.y))
         let threshold: Float = 20.0
 
-        let clickPt = SIMD2<Float>(Float(screenPoint.x), Float(screenPoint.y))
+        if state.sceneToolMode == .rotate {
+            return hitTestRotateRings(entityPos: entityPos, camDist: camDist, vpMatrix: vpMatrix,
+                                      clickPt: clickPt, viewSize: viewSize, threshold: threshold)
+        }
+
+        let gizmoLen = camDist * 0.18 * 1.18
         var bestAxis: Int? = nil
         var bestDist: Float = threshold
 
@@ -630,7 +690,80 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 bestAxis = i
             }
         }
+
+        if state.sceneToolMode == .scale {
+            let centerScreen = worldToScreen(entityPos, vpMatrix: vpMatrix, viewSize: viewSize)
+            let centerDist = length(clickPt - centerScreen)
+            if centerDist < 25 {
+                bestAxis = 3
+            }
+        }
+
         return bestAxis
+    }
+
+    private func hitTestRotateRings(entityPos: SIMD3<Float>, camDist: Float, vpMatrix: simd_float4x4,
+                                    clickPt: SIMD2<Float>, viewSize: CGSize, threshold: Float) -> Int? {
+        let ringRadius = camDist * 0.18 * 0.9
+        let segments = 48
+
+        let axisNormals: [SIMD3<Float>] = [
+            SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0, 1)
+        ]
+        let axisStarts: [SIMD3<Float>] = [
+            SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0, 1), SIMD3<Float>(1, 0, 0)
+        ]
+
+        var bestAxis: Int? = nil
+        var bestDist: Float = threshold
+
+        for axisIdx in 0..<3 {
+            let normal = axisNormals[axisIdx]
+            let startVec = axisStarts[axisIdx]
+            let bitangent = normalize(cross(normal, startVec))
+            let d = distanceToScreenRing(center: entityPos, tangent: startVec, bitangent: bitangent,
+                                         radius: ringRadius, segments: segments,
+                                         vpMatrix: vpMatrix, viewSize: viewSize, clickPt: clickPt)
+            if d < bestDist {
+                bestDist = d
+                bestAxis = axisIdx
+            }
+        }
+
+        let yaw = state.cameraOrbitYaw
+        let pitch = state.cameraOrbitPitch
+        let viewNormal = SIMD3<Float>(cos(pitch) * sin(yaw), sin(pitch), cos(pitch) * cos(yaw))
+        var viewStart = cross(viewNormal, SIMD3<Float>(0, 1, 0))
+        if length(viewStart) < 0.001 { viewStart = cross(viewNormal, SIMD3<Float>(1, 0, 0)) }
+        viewStart = normalize(viewStart)
+        let viewBitangent = normalize(cross(viewNormal, viewStart))
+        let viewRingRadius = ringRadius * 1.15
+        let dView = distanceToScreenRing(center: entityPos, tangent: viewStart, bitangent: viewBitangent,
+                                         radius: viewRingRadius, segments: segments,
+                                         vpMatrix: vpMatrix, viewSize: viewSize, clickPt: clickPt)
+        if dView < bestDist {
+            bestDist = dView
+            bestAxis = 3
+        }
+
+        return bestAxis
+    }
+
+    private func distanceToScreenRing(center: SIMD3<Float>, tangent: SIMD3<Float>, bitangent: SIMD3<Float>,
+                                      radius: Float, segments: Int,
+                                      vpMatrix: simd_float4x4, viewSize: CGSize, clickPt: SIMD2<Float>) -> Float {
+        var minDist: Float = .greatestFiniteMagnitude
+        for i in 0..<segments {
+            let a0 = Float(i) / Float(segments) * Float.pi * 2
+            let a1 = Float(i + 1) / Float(segments) * Float.pi * 2
+            let p0 = center + (tangent * cos(a0) + bitangent * sin(a0)) * radius
+            let p1 = center + (tangent * cos(a1) + bitangent * sin(a1)) * radius
+            let s0 = worldToScreen(p0, vpMatrix: vpMatrix, viewSize: viewSize)
+            let s1 = worldToScreen(p1, vpMatrix: vpMatrix, viewSize: viewSize)
+            let d = distancePointToSegment(point: clickPt, a: s0, b: s1)
+            if d < minDist { minDist = d }
+        }
+        return minDist
     }
 
     // MARK: - MTKViewDelegate
@@ -774,7 +907,26 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     encoder.setCullMode(.none)
                 }
 
+                // Debug overlays for camera frustum / light visualization
                 if let tc = state.engine.world.getComponent(TransformComponent.self, from: selected) {
+                    let cam = state.engine.world.getComponent(CameraComponent.self, from: selected)
+                    let light = state.engine.world.getComponent(LightComponent.self, from: selected)
+                    if cam != nil || light != nil {
+                        let vpMatrix = projMatrix * viewMatrix
+                        debugOverlayRenderer?.drawForEntity(
+                            encoder: encoder,
+                            viewProjectionMatrix: vpMatrix,
+                            camera: cam,
+                            light: light,
+                            entityWorldMatrix: tc.worldMatrix,
+                            aspectRatio: aspect,
+                            device: dev
+                        )
+                    }
+                }
+
+                if state.sceneToolMode != .pan,
+                   let tc = state.engine.world.getComponent(TransformComponent.self, from: selected) {
                     let pos = SIMD3<Float>(
                         tc.worldMatrix.columns.3.x,
                         tc.worldMatrix.columns.3.y,
@@ -782,11 +934,19 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     )
                     let gizmoScale = dist * 0.18
                     let vpMatrix = projMatrix * viewMatrix
+                    let gizmoMode: GizmoRenderer.Mode
+                    switch state.sceneToolMode {
+                    case .translate: gizmoMode = .translate
+                    case .scale:     gizmoMode = .scale
+                    case .rotate:    gizmoMode = .rotate
+                    case .pan:       gizmoMode = .translate
+                    }
                     gizmoRenderer?.draw(
                         encoder: encoder,
                         viewProjectionMatrix: vpMatrix,
                         worldPosition: pos,
                         scale: gizmoScale,
+                        mode: gizmoMode,
                         device: dev
                     )
                 }
