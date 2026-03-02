@@ -21,6 +21,16 @@ struct SceneHierarchyView: View {
                     Circle()
                         .fill(MCTheme.statusRed)
                         .frame(width: 6, height: 6)
+                } else if state.autoSaveStatus == .saved {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(MCTheme.statusGreen)
+                            .frame(width: 5, height: 5)
+                        Text("Saved")
+                            .font(.system(size: 9))
+                            .foregroundStyle(MCTheme.statusGreen)
+                    }
+                    .transition(.opacity)
                 }
                 Spacer()
                 addEntityMenu
@@ -45,20 +55,24 @@ struct SceneHierarchyView: View {
 
     private var addEntityMenu: some View {
         Menu {
-            Menu("Primitives") {
-                ForEach(MeshType.builtinPrimitives, id: \.displayName) { meshType in
-                    Button(meshType.displayName) {
-                        state.addMeshEntity(name: meshType.displayName, meshType: meshType)
+            Button("Empty Entity") { state.addEmptyEntity() }
+            Divider()
+            Menu("Prefab") {
+                Menu("Mesh") {
+                    ForEach(MeshType.builtinPrimitives, id: \.displayName) { meshType in
+                        Button(meshType.displayName) {
+                            state.addMeshEntity(name: meshType.displayName, meshType: meshType)
+                        }
                     }
                 }
-            }
-            Menu("Lights") {
+                Button("Camera") { state.addCamera() }
                 Button("Directional Light") { state.addDirectionalLight() }
                 Button("Point Light") { state.addPointLight() }
                 Button("Spot Light") { state.addSpotLight() }
+                let hasSkybox = !state.engine.world.query(SkyboxComponent.self).isEmpty
+                Button("Skybox") { state.addSkybox() }
+                    .disabled(hasSkybox)
             }
-            Button("Camera") { state.addCamera() }
-            Button("Empty Entity") { state.addEmptyEntity() }
             Divider()
             managersSubmenu
         } label: {

@@ -88,6 +88,8 @@ public final class AssetThumbnailGenerator: @unchecked Sendable {
             return generatePlaceholderIcon(systemName: "waveform")
         case .prefabs:
             return generatePlaceholderIcon(systemName: "square.on.square.fill")
+        case .gameplay:
+            return generatePlaceholderIcon(systemName: "swift")
         }
     }
 

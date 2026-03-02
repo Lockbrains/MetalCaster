@@ -7,6 +7,13 @@ import UniformTypeIdentifiers
 
 struct ProjectAssetsView: View {
     @Environment(EditorState.self) private var state
+    @State private var showNewScriptAlert = false
+    @State private var newScriptName = ""
+    @State private var showNewMaterialAlert = false
+    @State private var newMaterialName = ""
+    @State private var newMaterialShader = "lit"
+    @State private var showNewShaderAlert = false
+    @State private var newShaderName = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,6 +28,53 @@ struct ProjectAssetsView: View {
             }
         }
         .background(MCTheme.background)
+        .alert("New Script", isPresented: $showNewScriptAlert) {
+            TextField("Script name", text: $newScriptName)
+            Button("Create") {
+                let name = newScriptName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                state.createGameplayScript(named: name)
+                newScriptName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newScriptName = ""
+            }
+        } message: {
+            Text("Enter a name for the new gameplay script.")
+        }
+        .alert("New Material", isPresented: $showNewMaterialAlert) {
+            TextField("Material name", text: $newMaterialName)
+            Picker("Base Shader", selection: $newMaterialShader) {
+                Text("Lit").tag("lit")
+                Text("Unlit").tag("unlit")
+                Text("Toon").tag("toon")
+            }
+            Button("Create") {
+                let name = newMaterialName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                state.createMaterialAsset(named: name, baseShader: newMaterialShader)
+                newMaterialName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newMaterialName = ""
+            }
+        } message: {
+            Text("Enter a name for the new material.")
+        }
+        .alert("New Shader", isPresented: $showNewShaderAlert) {
+            TextField("Shader name", text: $newShaderName)
+            Button("Create") {
+                let name = newShaderName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                state.createShaderAsset(named: name)
+                newShaderName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newShaderName = ""
+            }
+        } message: {
+            Text("Enter a name for the new shader.")
+        }
     }
 
     // MARK: - Search Bar
@@ -143,6 +197,40 @@ struct ProjectAssetsView: View {
                 state.refreshAssetBrowser()
             } label: {
                 Label("New Scene", systemImage: "film.fill")
+            }
+
+            Divider()
+        }
+
+        if state.selectedAssetCategory == .materials {
+            Button {
+                newMaterialName = ""
+                newMaterialShader = "lit"
+                showNewMaterialAlert = true
+            } label: {
+                Label("New Material", systemImage: "paintpalette.fill")
+            }
+
+            Divider()
+        }
+
+        if state.selectedAssetCategory == .shaders {
+            Button {
+                newShaderName = ""
+                showNewShaderAlert = true
+            } label: {
+                Label("New Shader", systemImage: "function")
+            }
+
+            Divider()
+        }
+
+        if state.selectedAssetCategory == .gameplay {
+            Button {
+                newScriptName = ""
+                showNewScriptAlert = true
+            } label: {
+                Label("New Script", systemImage: "chevron.left.forwardslash.chevron.right")
             }
 
             Divider()
@@ -492,6 +580,10 @@ struct AssetListRow: View {
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
                     state.requestLoadScene(from: url)
                 }
+            case .materials:
+                if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                    state.assignMaterialAsset(from: url)
+                }
             default:
                 #if os(macOS)
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
@@ -529,6 +621,7 @@ struct AssetListRow: View {
         case "metal": return "function"
         case "wav", "mp3", "aac", "m4a", "ogg": return "speaker.wave.2"
         case "mcprefab": return "square.on.square"
+        case "swift": return "swift"
         default: return "doc"
         }
     }

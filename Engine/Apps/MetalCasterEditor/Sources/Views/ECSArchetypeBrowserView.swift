@@ -10,6 +10,7 @@ struct ECSArchetypeBrowserView: View {
         let _ = state.worldRevision
         let world = state.engine.world
         let archetypes = computeArchetypes(world: world)
+        let ubiquitous = computeUbiquitous(archetypes)
 
         if archetypes.isEmpty {
             Spacer()
@@ -21,7 +22,7 @@ struct ECSArchetypeBrowserView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(archetypes) { arch in
-                        archetypeCard(arch, world: world, totalEntityCount: world.entityCount)
+                        archetypeCard(arch, ubiquitous: ubiquitous, world: world, totalEntityCount: world.entityCount)
                     }
                 }
                 .padding(.vertical, MCTheme.panelPadding)
@@ -32,10 +33,11 @@ struct ECSArchetypeBrowserView: View {
     // MARK: - Archetype Card
 
     @ViewBuilder
-    private func archetypeCard(_ arch: ArchetypeGroup, world: World, totalEntityCount: Int) -> some View {
+    private func archetypeCard(_ arch: ArchetypeGroup, ubiquitous: Set<String>, world: World, totalEntityCount: Int) -> some View {
         let isExpanded = expandedIDs.contains(arch.id)
-        let sizes = arch.components.map { name in
-            ComponentSizeEntry(name: name, size: world.estimatedComponentSize(for: ComponentTypeKey(name: name)) ?? 0)
+        let name = archetypeName(arch, ubiquitous: ubiquitous)
+        let sizes = arch.components.map { comp in
+            ComponentSizeEntry(name: comp, size: world.estimatedComponentSize(for: ComponentTypeKey(name: comp)) ?? 0)
         }
         let perEntity = sizes.reduce(0) { $0 + $1.size }
         let total = perEntity * arch.entities.count
@@ -48,14 +50,29 @@ struct ECSArchetypeBrowserView: View {
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(MCTheme.textTertiary)
 
-                        componentSignature(arch.components)
+                        Text(name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(MCTheme.textPrimary)
 
                         Spacer()
 
                         Text("\(arch.entities.count)")
                             .font(MCTheme.fontMono)
                             .foregroundStyle(MCTheme.textTertiary)
+
+                        Button {
+                            state.addEntityFromArchetype(componentNames: arch.signature)
+                        } label: {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 11))
+                                .foregroundStyle(MCTheme.textTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("New entity with this archetype")
                     }
+
+                    componentSignature(arch.components)
+                        .padding(.leading, 20)
 
                     HStack(spacing: 4) {
                         Text("~\(formatBytes(perEntity))/entity")
@@ -97,7 +114,7 @@ struct ECSArchetypeBrowserView: View {
             ForEach(components, id: \.self) { name in
                 Text(displayName(name))
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(componentColor(name))
+                    .foregroundStyle(componentColor(name).opacity(0.7))
             }
         }
     }
@@ -206,7 +223,28 @@ struct ECSArchetypeBrowserView: View {
                 entities: entities.sorted()
             )
         }
-        .sorted { $0.entities.count > $1.entities.count }
+        .sorted {
+            if $0.entities.count != $1.entities.count {
+                return $0.entities.count > $1.entities.count
+            }
+            return $0.id < $1.id
+        }
+    }
+
+    /// Components shared by every archetype — these are "ubiquitous" and stripped from display names.
+    private func computeUbiquitous(_ archetypes: [ArchetypeGroup]) -> Set<String> {
+        guard archetypes.count >= 2, let first = archetypes.first else { return [] }
+        var common = first.signature
+        for arch in archetypes.dropFirst() {
+            common.formIntersection(arch.signature)
+        }
+        return common
+    }
+
+    private func archetypeName(_ arch: ArchetypeGroup, ubiquitous: Set<String>) -> String {
+        let unique = arch.components.filter { !ubiquitous.contains($0) }
+        if unique.isEmpty { return "Base" }
+        return unique.map { displayName($0) }.joined(separator: " · ")
     }
 
     // MARK: - Helpers

@@ -17,8 +17,8 @@ public protocol System: AnyObject, Sendable {
     /// Called once when the system is first registered with the engine.
     func setup(world: World)
 
-    /// Called every frame. The main update loop entry point.
-    func update(world: World, deltaTime: Float)
+    /// Called every frame with the full engine context.
+    func update(context: UpdateContext)
 
     /// Called when the system is removed from the engine.
     func teardown(world: World)

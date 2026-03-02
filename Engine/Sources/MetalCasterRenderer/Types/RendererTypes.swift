@@ -227,6 +227,19 @@ public struct Uniforms: Sendable {
     }
 }
 
+// MARK: - Skybox Uniforms (CPU ↔ GPU)
+
+/// Uniform buffer for skybox rendering.
+/// Contains a view-projection matrix with translation zeroed out.
+/// Memory layout must match the MSL `SkyboxUniforms` struct exactly.
+public struct SkyboxUniforms: Sendable {
+    public var viewProjectionMatrix: simd_float4x4
+
+    public init(viewProjectionMatrix: simd_float4x4 = matrix_identity_float4x4) {
+        self.viewProjectionMatrix = viewProjectionMatrix
+    }
+}
+
 // MARK: - Post-Process Uniforms (CPU ↔ GPU)
 
 /// Uniform buffer for post-processing passes.

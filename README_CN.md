@@ -193,7 +193,7 @@ Metal Caster 采用严格的实体-组件-系统架构：
 - **Entity** — 一个 `UInt64` 标识符，仅此而已
 - **Component** — 遵循 `Component` 协议的 Swift 结构体（要求 `Codable` + `Sendable`）
 - **World** — 稀疏集存储（`[ComponentType: [Entity: Component]]`）
-- **System** — 无状态处理器，通过 `update(world:deltaTime:)` 方法运行
+- **System** — 无状态处理器，通过 `update(context: UpdateContext)` 方法运行
 - **Query** — 类型安全的组件查询：`world.query(TransformComponent.self, MeshComponent.self)`
 
 ### 内置组件

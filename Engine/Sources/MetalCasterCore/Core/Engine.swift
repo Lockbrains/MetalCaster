@@ -1,4 +1,5 @@
 import Foundation
+import MetalCasterInput
 
 /// The main engine coordinator. Manages the World and all registered Systems.
 ///
@@ -12,6 +13,9 @@ public final class Engine: @unchecked Sendable {
     /// The event bus for inter-system communication.
     public let events: EventBus
 
+    /// Cross-platform input abstraction, available to all systems via UpdateContext.
+    public let input: InputManager
+
     /// All registered systems, sorted by priority.
     private var systems: [any System] = []
 
@@ -24,12 +28,16 @@ public final class Engine: @unchecked Sendable {
     /// Time of the last frame, in seconds.
     public private(set) var deltaTime: Float = 0
 
+    /// Number of frames ticked since the engine started.
+    public private(set) var frameCount: UInt64 = 0
+
     /// The fixed timestep for physics updates (default 1/60).
     public var fixedDeltaTime: Float = 1.0 / 60.0
 
     public init() {
         self.world = World()
         self.events = EventBus()
+        self.input = InputManager()
     }
 
     // MARK: - System Management
@@ -61,11 +69,26 @@ public final class Engine: @unchecked Sendable {
     public func tick(deltaTime dt: Float) {
         self.deltaTime = dt
         self.totalTime += dt
+        self.frameCount += 1
+
+        let context = UpdateContext(
+            world: world,
+            time: TimeState(
+                deltaTime: dt,
+                fixedDeltaTime: fixedDeltaTime,
+                totalTime: totalTime,
+                frameCount: frameCount
+            ),
+            input: input,
+            events: events,
+            engine: self
+        )
 
         for system in systems where system.isEnabled {
-            system.update(world: world, deltaTime: dt)
+            system.update(context: context)
         }
 
+        input.endFrame()
         events.flush()
     }
 
@@ -73,6 +96,7 @@ public final class Engine: @unchecked Sendable {
     public func start() {
         isRunning = true
         totalTime = 0
+        frameCount = 0
     }
 
     /// Stops the engine and tears down all systems.
@@ -88,6 +112,8 @@ public final class Engine: @unchecked Sendable {
         world.clear()
         totalTime = 0
         deltaTime = 0
+        frameCount = 0
+        input.reset()
         for system in systems {
             system.setup(world: world)
         }

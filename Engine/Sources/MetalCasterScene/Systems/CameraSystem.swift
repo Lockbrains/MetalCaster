@@ -50,8 +50,8 @@ public final class CameraSystem: System {
 
     public init() {}
     
-    public func update(world: World, deltaTime: Float) {
-        let cameras = world.query(TransformComponent.self, CameraComponent.self)
+    public func update(context: UpdateContext) {
+        let cameras = context.world.query(TransformComponent.self, CameraComponent.self)
         
         guard let (_, tc, cam) = cameras.first(where: { $0.2.isActive }) ?? cameras.first else {
             return

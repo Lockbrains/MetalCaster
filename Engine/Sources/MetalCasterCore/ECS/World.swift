@@ -199,6 +199,99 @@ public final class World: @unchecked Sendable {
         return type(of: anyComponent).estimatedSize
     }
 
+    /// Returns all components attached to an entity as type-erased key-value pairs.
+    public func allComponents(of entity: Entity) -> [(ComponentTypeKey, any Component)] {
+        storage.compactMap { (key, map) in
+            guard let component = map[entity] else { return nil }
+            return (key, component)
+        }
+    }
+
+    // MARK: - forEach Queries (allocation-free)
+
+    /// Iterates all entities with a specific component, invoking a closure for each match.
+    public func forEach<A: Component>(
+        _ a: A.Type,
+        body: (Entity, A) -> Void
+    ) {
+        let keyA = ComponentTypeKey(A.self)
+        guard let mapA = storage[keyA] else { return }
+        for (entity, component) in mapA {
+            if let ca = component as? A {
+                body(entity, ca)
+            }
+        }
+    }
+
+    /// Iterates all entities with two specific components.
+    public func forEach<A: Component, B: Component>(
+        _ a: A.Type, _ b: B.Type,
+        body: (Entity, A, B) -> Void
+    ) {
+        let keyA = ComponentTypeKey(A.self)
+        let keyB = ComponentTypeKey(B.self)
+        guard let mapA = storage[keyA], let mapB = storage[keyB] else { return }
+
+        let smaller = mapA.count <= mapB.count ? mapA : mapB
+        for entity in smaller.keys {
+            if let ca = mapA[entity] as? A, let cb = mapB[entity] as? B {
+                body(entity, ca, cb)
+            }
+        }
+    }
+
+    /// Iterates all entities with three specific components.
+    public func forEach<A: Component, B: Component, C: Component>(
+        _ a: A.Type, _ b: B.Type, _ c: C.Type,
+        body: (Entity, A, B, C) -> Void
+    ) {
+        let keyA = ComponentTypeKey(A.self)
+        let keyB = ComponentTypeKey(B.self)
+        let keyC = ComponentTypeKey(C.self)
+        guard let mapA = storage[keyA], let mapB = storage[keyB], let mapC = storage[keyC] else { return }
+
+        let smallest = [mapA, mapB, mapC].min(by: { $0.count < $1.count })!
+        for entity in smallest.keys {
+            if let ca = mapA[entity] as? A,
+               let cb = mapB[entity] as? B,
+               let cc = mapC[entity] as? C {
+                body(entity, ca, cb, cc)
+            }
+        }
+    }
+
+    /// Iterates all entities with four specific components.
+    public func forEach<A: Component, B: Component, C: Component, D: Component>(
+        _ a: A.Type, _ b: B.Type, _ c: C.Type, _ d: D.Type,
+        body: (Entity, A, B, C, D) -> Void
+    ) {
+        let keyA = ComponentTypeKey(A.self)
+        let keyB = ComponentTypeKey(B.self)
+        let keyC = ComponentTypeKey(C.self)
+        let keyD = ComponentTypeKey(D.self)
+        guard let mapA = storage[keyA], let mapB = storage[keyB],
+              let mapC = storage[keyC], let mapD = storage[keyD] else { return }
+
+        let smallest = [mapA, mapB, mapC, mapD].min(by: { $0.count < $1.count })!
+        for entity in smallest.keys {
+            if let ca = mapA[entity] as? A,
+               let cb = mapB[entity] as? B,
+               let cc = mapC[entity] as? C,
+               let cd = mapD[entity] as? D {
+                body(entity, ca, cb, cc, cd)
+            }
+        }
+    }
+
+    // MARK: - Component Mutation Helper
+
+    /// Mutates a component in-place on an entity. Does nothing if the component is absent.
+    public func update<C: Component>(_ type: C.Type, on entity: Entity, _ mutate: (inout C) -> Void) {
+        guard var component = getComponent(type, from: entity) else { return }
+        mutate(&component)
+        addComponent(component, to: entity)
+    }
+
     // MARK: - Bulk Operations
 
     /// Removes all entities and components.

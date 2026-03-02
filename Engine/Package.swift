@@ -24,6 +24,7 @@ let package = Package(
         // ── Core Engine Libraries ──────────────────────────────────
         .target(
             name: "MetalCasterCore",
+            dependencies: ["MetalCasterInput"],
             path: "Sources/MetalCasterCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -31,6 +32,7 @@ let package = Package(
             name: "MetalCasterRenderer",
             dependencies: ["MetalCasterCore"],
             path: "Sources/MetalCasterRenderer",
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(

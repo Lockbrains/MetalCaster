@@ -31,6 +31,7 @@ public final class EditorState {
     public let cameraSystem = CameraSystem()
     public let lightingSystem = LightingSystem()
     public let meshRenderSystem = MeshRenderSystem()
+    public let skyboxSystem = SkyboxSystem()
 
     // MARK: - Selection
 
@@ -41,12 +42,51 @@ public final class EditorState {
     public var worldRevision: Int = 0
 
     /// Mutate the world and bump the revision counter so SwiftUI re-renders.
+    /// Edits are coalesced: rapid successive changes to the same entity become a single undo entry.
     public func updateComponent<C: Component>(_ type: C.Type, on entity: Entity, _ body: (inout C) -> Void) {
+        if pendingEdit?.entity != entity {
+            commitPendingEdit()
+            pendingEdit = PendingComponentEdit(
+                entity: entity,
+                beforeSnapshot: EntitySnapshot.capture(entity: entity, world: engine.world)
+            )
+        }
+
         guard var comp = engine.world.getComponent(type, from: entity) else { return }
         body(&comp)
         engine.world.addComponent(comp, to: entity)
         worldRevision += 1
         markDirty()
+
+        pendingEditTimer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in
+            self?.commitPendingEdit()
+        }
+        pendingEditTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timer)
+    }
+
+    private struct PendingComponentEdit {
+        let entity: Entity
+        let beforeSnapshot: EntitySnapshot
+    }
+
+    private var pendingEdit: PendingComponentEdit?
+    private var pendingEditTimer: DispatchWorkItem?
+
+    /// Flush any pending component edit as a single undo command.
+    public func commitPendingEdit() {
+        pendingEditTimer?.cancel()
+        pendingEditTimer = nil
+        guard let edit = pendingEdit else { return }
+        pendingEdit = nil
+        guard engine.world.isAlive(edit.entity) else { return }
+        let afterSnapshot = EntitySnapshot.capture(entity: edit.entity, world: engine.world)
+        recordCommand(ComponentChangeCommand(
+            entityID: edit.entity.id,
+            beforeSnapshot: edit.beforeSnapshot,
+            afterSnapshot: afterSnapshot
+        ))
     }
 
     /// Marks the current scene as having unsaved changes.
@@ -59,9 +99,19 @@ public final class EditorState {
 
     private func scheduleAutoSave() {
         autoSaveTask?.cancel()
+        autoSaveFadeTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
-            self?.saveScene()
-            self?.isSceneDirty = false
+            guard let self else { return }
+            self.saveScene()
+            self.isSceneDirty = false
+            self.autoSaveStatus = .saved
+            let fade = DispatchWorkItem { [weak self] in
+                if self?.autoSaveStatus == .saved {
+                    self?.autoSaveStatus = .idle
+                }
+            }
+            self.autoSaveFadeTask = fade
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: fade)
         }
         autoSaveTask = task
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: task)
@@ -72,6 +122,10 @@ public final class EditorState {
     public var undoStack: [EditorCommand] = []
     public var redoStack: [EditorCommand] = []
 
+    // MARK: - Clipboard
+
+    public var entityClipboard: EntitySnapshot? = nil
+
     // MARK: - UI State
 
     public var showOpenPanel = false
@@ -81,6 +135,10 @@ public final class EditorState {
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
+
+    public enum AutoSaveStatus { case idle, saved }
+    public var autoSaveStatus: AutoSaveStatus = .idle
+    private var autoSaveFadeTask: DispatchWorkItem?
 
     /// Shown when the user attempts a destructive scene action while dirty.
     public var showSaveDirtyAlert: Bool = false
@@ -238,6 +296,7 @@ public final class EditorState {
         engine.addSystem(transformSystem)
         engine.addSystem(cameraSystem)
         engine.addSystem(lightingSystem)
+        engine.addSystem(skyboxSystem)
         engine.addSystem(meshRenderSystem)
 
         setupDefaultScene()
@@ -271,6 +330,9 @@ public final class EditorState {
     public func setupDefaultScene() {
         let world = engine.world
 
+        let skybox = sceneGraph.createEntity(name: "Skybox")
+        world.addComponent(SkyboxComponent(), to: skybox)
+
         let cam = sceneGraph.createEntity(
             name: "Main Camera",
             position: SIMD3<Float>(0, 2, 8)
@@ -291,8 +353,11 @@ public final class EditorState {
 
     @discardableResult
     public func addEmptyEntity() -> Entity {
+        commitPendingEdit()
         let entity = sceneGraph.createEntity(name: "Empty Entity")
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -300,19 +365,16 @@ public final class EditorState {
 
     @discardableResult
     public func addMeshEntity(name: String, meshType: MeshType) -> Entity {
+        commitPendingEdit()
         let entity = sceneGraph.createEntity(name: name)
+        engine.world.addComponent(MeshComponent(meshType: meshType), to: entity)
         engine.world.addComponent(
-            MeshComponent(meshType: meshType),
-            to: entity
-        )
-        engine.world.addComponent(
-            MaterialComponent(material: MCMaterial(
-                name: "\(name) Material",
-                fragmentShaderSource: ShaderSnippets.lambertShading
-            )),
+            MaterialComponent(material: MaterialRegistry.litMaterial),
             to: entity
         )
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -320,12 +382,12 @@ public final class EditorState {
 
     @discardableResult
     public func addCamera() -> Entity {
-        let entity = sceneGraph.createEntity(
-            name: "Camera",
-            position: SIMD3<Float>(0, 2, 8)
-        )
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Camera", position: SIMD3<Float>(0, 2, 8))
         engine.world.addComponent(CameraComponent(isActive: false), to: entity)
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -333,12 +395,12 @@ public final class EditorState {
 
     @discardableResult
     public func addDirectionalLight() -> Entity {
+        commitPendingEdit()
         let entity = sceneGraph.createEntity(name: "Directional Light")
-        engine.world.addComponent(
-            LightComponent(type: .directional),
-            to: entity
-        )
+        engine.world.addComponent(LightComponent(type: .directional), to: entity)
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -346,15 +408,25 @@ public final class EditorState {
 
     @discardableResult
     public func addPointLight() -> Entity {
-        let entity = sceneGraph.createEntity(
-            name: "Point Light",
-            position: SIMD3<Float>(0, 3, 0)
-        )
-        engine.world.addComponent(
-            LightComponent(type: .point, range: 10),
-            to: entity
-        )
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Point Light", position: SIMD3<Float>(0, 3, 0))
+        engine.world.addComponent(LightComponent(type: .point, range: 10), to: entity)
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    @discardableResult
+    public func addSkybox(hdriTexturePath: String? = nil) -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Skybox")
+        engine.world.addComponent(SkyboxComponent(hdriTexturePath: hdriTexturePath), to: entity)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -362,15 +434,51 @@ public final class EditorState {
 
     @discardableResult
     public func addSpotLight() -> Entity {
-        let entity = sceneGraph.createEntity(
-            name: "Spot Light",
-            position: SIMD3<Float>(0, 3, 0)
-        )
-        engine.world.addComponent(
-            LightComponent(type: .spot, range: 15),
-            to: entity
-        )
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Spot Light", position: SIMD3<Float>(0, 3, 0))
+        engine.world.addComponent(LightComponent(type: .spot, range: 15), to: entity)
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    /// Creates a new entity with default-initialized components matching the given archetype signature.
+    @discardableResult
+    public func addEntityFromArchetype(componentNames: Set<String>) -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "New Entity")
+        let world = engine.world
+
+        for name in componentNames {
+            switch name {
+            case NameComponent.componentName:
+                break // already added by createEntity
+            case TransformComponent.componentName:
+                break // already added by createEntity
+            case MeshComponent.componentName:
+                world.addComponent(MeshComponent(meshType: .cube), to: entity)
+            case MaterialComponent.componentName:
+                world.addComponent(
+                    MaterialComponent(material: MaterialRegistry.litMaterial),
+                    to: entity
+                )
+            case CameraComponent.componentName:
+                world.addComponent(CameraComponent(isActive: false), to: entity)
+            case LightComponent.componentName:
+                world.addComponent(LightComponent(type: .directional), to: entity)
+            case ManagerComponent.componentName:
+                break // managers should not be spawned this way
+            default:
+                break
+            }
+        }
+
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
@@ -380,20 +488,26 @@ public final class EditorState {
 
     @discardableResult
     public func addManager(_ type: ManagerComponent.ManagerType) -> Entity? {
+        commitPendingEdit()
         let existing = engine.world.query(ManagerComponent.self)
         if existing.contains(where: { $0.1.managerType == type }) { return nil }
 
         let entity = sceneGraph.createEntity(name: type.rawValue)
         engine.world.addComponent(ManagerComponent(managerType: type), to: entity)
         selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
         worldRevision += 1
         markDirty()
         return entity
     }
 
     public func removeManager(_ type: ManagerComponent.ManagerType) {
+        commitPendingEdit()
         let managers = engine.world.query(ManagerComponent.self)
         guard let (entity, _) = managers.first(where: { $0.1.managerType == type }) else { return }
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(DeleteEntityCommand(entityID: entity.id, snapshot: snapshot))
         sceneGraph.destroyEntityRecursive(entity)
         if selectedEntity == entity { selectedEntity = nil }
         worldRevision += 1
@@ -401,7 +515,10 @@ public final class EditorState {
     }
 
     public func deleteSelectedEntity() {
+        commitPendingEdit()
         guard let entity = selectedEntity else { return }
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(DeleteEntityCommand(entityID: entity.id, snapshot: snapshot))
         sceneGraph.destroyEntityRecursive(entity)
         selectedEntity = nil
         worldRevision += 1
@@ -409,36 +526,43 @@ public final class EditorState {
     }
 
     public func duplicateSelectedEntity() {
+        commitPendingEdit()
         guard let entity = selectedEntity else { return }
         let world = engine.world
-
         if world.hasComponent(ManagerComponent.self, on: entity) { return }
 
-        let name = sceneGraph.name(of: entity) + " Copy"
-        let copy = sceneGraph.createEntity(name: name)
+        var snapshot = EntitySnapshot.capture(entity: entity, world: world)
+        if var tc = snapshot.transform {
+            tc.transform.position.x += 1
+            snapshot.transform = tc
+        }
+        if var name = snapshot.name {
+            name.name += " Copy"
+            snapshot.name = name
+        }
+        snapshot.manager = nil
+        executeCommand(CreateEntityCommand(snapshot: snapshot))
+    }
 
-        if let tc = world.getComponent(TransformComponent.self, from: entity) {
-            var newTC = tc
-            newTC.transform.position.x += 1
-            newTC.parent = tc.parent
-            world.addComponent(newTC, to: copy)
-        }
-        if let mc = world.getComponent(MeshComponent.self, from: entity) {
-            world.addComponent(mc, to: copy)
-        }
-        if let mat = world.getComponent(MaterialComponent.self, from: entity) {
-            world.addComponent(mat, to: copy)
-        }
-        if let cam = world.getComponent(CameraComponent.self, from: entity) {
-            world.addComponent(cam, to: copy)
-        }
-        if let light = world.getComponent(LightComponent.self, from: entity) {
-            world.addComponent(light, to: copy)
-        }
+    // MARK: - Clipboard
 
-        selectedEntity = copy
-        worldRevision += 1
-        markDirty()
+    public func copySelectedEntity() {
+        guard let entity = selectedEntity else { return }
+        entityClipboard = EntitySnapshot.capture(entity: entity, world: engine.world)
+    }
+
+    public func pasteEntity() {
+        commitPendingEdit()
+        guard var snapshot = entityClipboard else { return }
+        if var tc = snapshot.transform {
+            tc.transform.position.x += 1
+            snapshot.transform = tc
+        }
+        if var name = snapshot.name {
+            name.name += " Copy"
+            snapshot.name = name
+        }
+        executeCommand(CreateEntityCommand(snapshot: snapshot))
     }
 
     // MARK: - Scene IO
@@ -641,6 +765,37 @@ public final class EditorState {
         assetBrowserRevision += 1
     }
 
+    /// Creates a new gameplay script from the template and places it in the Gameplay directory.
+    public func createGameplayScript(named name: String) {
+        guard let dir = projectManager.directoryURL(for: .gameplay) else {
+            print("[MetalCaster] Gameplay directory not available")
+            return
+        }
+
+        let sanitized = name.replacingOccurrences(of: " ", with: "")
+        let filename = "\(sanitized)Script.swift"
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("[MetalCaster] Script already exists: \(filename)")
+            return
+        }
+
+        let content = ScriptTemplateGenerator.generate(name: sanitized)
+        do {
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
+            _ = projectManager.ensureMeta(
+                for: "Gameplay/\(filename)",
+                type: .gameplay
+            )
+            selectedAssetCategory = .gameplay
+            assetBrowserSubfolder = nil
+            refreshAssetBrowser()
+        } catch {
+            print("[MetalCaster] Failed to create script: \(error)")
+        }
+    }
+
     /// Imports a file into the project via AssetDatabase.
     public func importAssetFile(from url: URL) {
         do {
@@ -652,6 +807,194 @@ public final class EditorState {
         } catch {
             print("[MetalCaster] Failed to import asset: \(error)")
         }
+    }
+
+    // MARK: - Material Asset Creation
+
+    /// Creates a new material asset (.mcmat) in the Materials directory.
+    public func createMaterialAsset(named name: String, baseShader: String = "lit") {
+        guard let dir = projectManager.directoryURL(for: .materials) else {
+            print("[MetalCaster] Materials directory not available")
+            return
+        }
+
+        let sanitized = name.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: " ", with: "_")
+        let filename = "\(sanitized).mcmat"
+        var fileURL = dir
+        if let sub = assetBrowserSubfolder {
+            fileURL = fileURL.appendingPathComponent(sub)
+        }
+        fileURL = fileURL.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("[MetalCaster] Material already exists: \(filename)")
+            return
+        }
+
+        let builtinID: UUID
+        switch baseShader {
+        case "unlit": builtinID = MaterialRegistry.unlitMaterialID
+        case "toon":  builtinID = MaterialRegistry.toonMaterialID
+        default:      builtinID = MaterialRegistry.litMaterialID
+        }
+
+        guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
+
+        let material = MCMaterial(
+            name: sanitized,
+            materialType: .custom,
+            renderState: builtin.renderState,
+            vertexShaderSource: builtin.vertexShaderSource,
+            fragmentShaderSource: builtin.fragmentShaderSource,
+            unifiedShaderSource: builtin.unifiedShaderSource,
+            dataFlowConfig: builtin.dataFlowConfig,
+            surfaceProperties: MCMaterialProperties()
+        )
+
+        do {
+            try material.save(to: fileURL)
+            let relPath = "Materials/\(assetBrowserSubfolder.map { $0 + "/" } ?? "")\(filename)"
+            _ = projectManager.ensureMeta(for: relPath, type: .materials)
+            selectedAssetCategory = .materials
+            refreshAssetBrowser()
+        } catch {
+            print("[MetalCaster] Failed to create material: \(error)")
+        }
+    }
+
+    /// Creates a new shader asset (.metal) in the Shaders directory.
+    public func createShaderAsset(named name: String) {
+        guard let dir = projectManager.directoryURL(for: .shaders) else {
+            print("[MetalCaster] Shaders directory not available")
+            return
+        }
+
+        let sanitized = name.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: " ", with: "_")
+        let filename = "\(sanitized).metal"
+        var fileURL = dir
+        if let sub = assetBrowserSubfolder {
+            fileURL = fileURL.appendingPathComponent(sub)
+        }
+        fileURL = fileURL.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("[MetalCaster] Shader already exists: \(filename)")
+            return
+        }
+
+        let template = Self.shaderTemplate(name: sanitized)
+
+        do {
+            try template.write(to: fileURL, atomically: true, encoding: .utf8)
+            let relPath = "Shaders/\(assetBrowserSubfolder.map { $0 + "/" } ?? "")\(filename)"
+            _ = projectManager.ensureMeta(for: relPath, type: .shaders)
+            selectedAssetCategory = .shaders
+            refreshAssetBrowser()
+        } catch {
+            print("[MetalCaster] Failed to create shader: \(error)")
+        }
+    }
+
+    /// Loads a .mcmat file and assigns it to the selected entity.
+    public func assignMaterialAsset(from url: URL) {
+        guard let entity = selectedEntity else {
+            print("[MetalCaster] No entity selected to assign material")
+            return
+        }
+
+        do {
+            let material = try MCMaterial.load(from: url)
+            if engine.world.hasComponent(MaterialComponent.self, on: entity) {
+                updateComponent(MaterialComponent.self, on: entity) { mc in
+                    mc.material = material
+                }
+            } else {
+                engine.world.addComponent(MaterialComponent(material: material), to: entity)
+                worldRevision += 1
+                markDirty()
+            }
+        } catch {
+            print("[MetalCaster] Failed to load material asset: \(error)")
+        }
+    }
+
+    private static func shaderTemplate(name: String) -> String {
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        // Metal Caster — Custom Shader: \(name)
+        //
+        // Vertex input from engine mesh pipeline.
+        struct VertexIn {
+            float3 position [[attribute(0)]];
+            float3 normal   [[attribute(1)]];
+            float2 texCoord [[attribute(2)]];
+        };
+
+        struct Uniforms {
+            float4x4 mvpMatrix;
+            float4x4 modelMatrix;
+            float4x4 normalMatrix;
+            float4   cameraPosition;
+            float    time;
+            float    _pad0;
+            float    _pad1;
+            float    _pad2;
+        };
+
+        struct MaterialProperties {
+            float3 baseColor;
+            float metallic;
+            float roughness;
+            float _pad0;
+            float3 emissiveColor;
+            float emissiveIntensity;
+            uint hasAlbedoTexture;
+            uint hasNormalMap;
+            uint hasMetallicRoughnessMap;
+            uint _pad1;
+        };
+
+        struct VertexOut {
+            float4 position [[position]];
+            float3 normalWS;
+            float3 positionWS;
+            float2 texCoord;
+        };
+
+        vertex VertexOut vertex_main(VertexIn in [[stage_in]],
+                                     constant Uniforms &uniforms [[buffer(1)]]) {
+            VertexOut out;
+            out.position = uniforms.mvpMatrix * float4(in.position, 1.0);
+            float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
+            out.positionWS = worldPos.xyz;
+            out.normalWS = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+            out.texCoord = in.texCoord;
+            return out;
+        }
+
+        fragment float4 fragment_main(VertexOut in [[stage_in]],
+                                      constant MaterialProperties &material [[buffer(2)]],
+                                      texture2d<float> albedoTex [[texture(0)]]) {
+            constexpr sampler texSampler(address::repeat, filter::linear);
+
+            float3 color = material.baseColor;
+            if (material.hasAlbedoTexture != 0) {
+                color *= albedoTex.sample(texSampler, in.texCoord).rgb;
+            }
+
+            // Simple hemisphere lighting
+            float3 N = normalize(in.normalWS);
+            float NdotUp = dot(N, float3(0, 1, 0)) * 0.5 + 0.5;
+            color *= mix(0.3, 1.0, NdotUp);
+
+            color += material.emissiveColor * material.emissiveIntensity;
+            return float4(color, 1.0);
+        }
+        """
     }
 
     /// Navigates the asset browser into a subfolder.

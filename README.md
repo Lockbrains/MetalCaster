@@ -206,7 +206,7 @@ Metal Caster uses a strict Entity-Component-System architecture:
 - **Entity** — a `UInt64` identifier, nothing more
 - **Component** — Swift structs conforming to `Component` protocol (requires `Codable` + `Sendable`)
 - **World** — sparse-set storage (`[ComponentType: [Entity: Component]]`)
-- **System** — stateless processors with `update(world:deltaTime:)` method
+- **System** — stateless processors with `update(context: UpdateContext)` method
 - **Query** — type-safe component queries: `world.query(TransformComponent.self, MeshComponent.self)`
 
 ### Built-in Components

@@ -38,6 +38,9 @@ public final class SceneSerializer {
             if let manager = world.getComponent(ManagerComponent.self, from: entity) {
                 entityData.manager = manager
             }
+            if let skybox = world.getComponent(SkyboxComponent.self, from: entity) {
+                entityData.skybox = skybox
+            }
             
             sceneData.entities.append(entityData)
         }
@@ -92,6 +95,9 @@ public final class SceneSerializer {
             if let manager = ed.manager {
                 world.addComponent(manager, to: entity)
             }
+            if let skybox = ed.skybox {
+                world.addComponent(skybox, to: entity)
+            }
         }
     }
 }
@@ -112,4 +118,5 @@ struct EntityData: Codable {
     var camera: CameraComponent?
     var light: LightComponent?
     var manager: ManagerComponent?
+    var skybox: SkyboxComponent?
 }

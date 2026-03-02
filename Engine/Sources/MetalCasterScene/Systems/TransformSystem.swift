@@ -12,7 +12,8 @@ public final class TransformSystem: System {
     
     public init() {}
     
-    public func update(world: World, deltaTime: Float) {
+    public func update(context: UpdateContext) {
+        let world = context.world
         let transforms = world.query(TransformComponent.self)
         
         // Build parent lookup

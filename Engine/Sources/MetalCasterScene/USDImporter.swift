@@ -269,6 +269,9 @@ public final class USDImporter {
             if let mgr = meta?.manager {
                 world.addComponent(mgr, to: entity)
             }
+            if let sky = meta?.skybox {
+                world.addComponent(sky, to: entity)
+            }
             
         default:
             break

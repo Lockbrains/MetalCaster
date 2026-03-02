@@ -30,6 +30,8 @@ public final class AssetProcessor: @unchecked Sendable {
             return processAudio(at: fileURL)
         case .scenes, .materials, .prefabs:
             return validateJSON(at: fileURL, category: category)
+        case .gameplay:
+            return processSwiftScript(at: fileURL)
         }
     }
 
@@ -97,6 +99,20 @@ public final class AssetProcessor: @unchecked Sendable {
             return false
         }
 
+        return true
+    }
+
+    // MARK: - Swift Script Processing
+
+    private func processSwiftScript(at url: URL) -> Bool {
+        guard let source = try? String(contentsOf: url, encoding: .utf8), !source.isEmpty else {
+            print("[AssetProcessor] Cannot read script: \(url.lastPathComponent)")
+            return false
+        }
+        let hasECSType = source.contains("Component") || source.contains("System")
+        if !hasECSType {
+            print("[AssetProcessor] Script has no Component or System type: \(url.lastPathComponent)")
+        }
         return true
     }
 

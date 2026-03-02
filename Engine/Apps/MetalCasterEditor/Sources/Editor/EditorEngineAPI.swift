@@ -74,13 +74,18 @@ final class EditorEngineAPI: EngineAPIProvider {
             totalTime: state.engine.totalTime
         )
 
+        let systemInfos = state.engine.registeredSystems.map { sys in
+            SystemInfo(name: sys.name, priority: sys.priority, isEnabled: sys.isEnabled)
+        }
+
         return EngineSnapshot(
             entityCount: world.entityCount,
             entities: entityInfos,
             hierarchy: hierarchy,
             selectedEntityID: state.selectedEntity?.id,
             renderInfo: renderInfo,
-            metrics: metrics
+            metrics: metrics,
+            systems: systemInfos
         )
     }
 
@@ -159,6 +164,14 @@ final class EditorEngineAPI: EngineAPIProvider {
             return toolAnalyzeDrawCalls()
         case "suggestOptimizations":
             return toolSuggestOptimizations()
+
+        // ── System Tools ─────────────────────────────────────────────
+        case "listSystems":
+            return toolListSystems()
+
+        // ── Gameplay Script Tools ────────────────────────────────────
+        case "createScript":
+            return toolCreateScript(arguments)
 
         // ── Asset Tools ──────────────────────────────────────────────
         case "listAssets":
@@ -708,6 +721,51 @@ final class EditorEngineAPI: EngineAPIProvider {
         return ToolResult(toolName: "suggestOptimizations", success: true, output: suggestions.joined(separator: "\n"))
     }
 
+    // MARK: - System Tool Implementations
+
+    @MainActor
+    private func toolListSystems() -> ToolResult {
+        let systems = state.engine.registeredSystems
+        var lines = ["Registered systems (\(systems.count)):"]
+        for sys in systems {
+            let status = sys.isEnabled ? "enabled" : "disabled"
+            lines.append("  [\(sys.priority)] \(sys.name) — \(status)")
+        }
+        return ToolResult(toolName: "listSystems", success: true, output: lines.joined(separator: "\n"))
+    }
+
+    // MARK: - Gameplay Script Tool Implementations
+
+    @MainActor
+    private func toolCreateScript(_ args: [String: JSONValue]) -> ToolResult {
+        guard let name = args["name"]?.stringValue, !name.isEmpty else {
+            return ToolResult(toolName: "createScript", success: false, output: "Missing or empty 'name' argument")
+        }
+
+        let sanitized = name.replacingOccurrences(of: " ", with: "")
+        guard let dir = state.projectManager.directoryURL(for: .gameplay) else {
+            return ToolResult(toolName: "createScript", success: false, output: "Gameplay directory not available")
+        }
+
+        let filename = "\(sanitized)Script.swift"
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            return ToolResult(toolName: "createScript", success: false, output: "Script '\(filename)' already exists")
+        }
+
+        let content = ScriptTemplateGenerator.generate(name: sanitized)
+        do {
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
+            _ = state.projectManager.ensureMeta(for: "Gameplay/\(filename)", type: .gameplay)
+            state.refreshAssetBrowser()
+            return ToolResult(toolName: "createScript", success: true,
+                              output: "Created gameplay script '\(filename)' with \(sanitized)Component + \(sanitized)System")
+        } catch {
+            return ToolResult(toolName: "createScript", success: false, output: "Failed to write script: \(error)")
+        }
+    }
+
     // MARK: - Asset Tool Implementations
 
     @MainActor
@@ -721,9 +779,10 @@ final class EditorEngineAPI: EngineAPIProvider {
         case "mesh":    categories = [.meshes]
         case "texture": categories = [.textures]
         case "scene":   categories = [.scenes]
-        case "shader":  categories = [.shaders]
-        case "audio":   categories = [.audio]
-        default:        categories = AssetCategory.allCases
+        case "shader":   categories = [.shaders]
+        case "audio":    categories = [.audio]
+        case "gameplay": categories = [.gameplay]
+        default:         categories = AssetCategory.allCases
         }
 
         for cat in categories {

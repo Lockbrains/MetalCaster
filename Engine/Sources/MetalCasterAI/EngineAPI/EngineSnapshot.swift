@@ -8,6 +8,7 @@ public struct EngineSnapshot: Codable, Sendable {
     public let selectedEntityID: UInt64?
     public let renderInfo: RenderInfo
     public let metrics: MetricsInfo
+    public let systems: [SystemInfo]
 
     public init(
         entityCount: Int,
@@ -15,7 +16,8 @@ public struct EngineSnapshot: Codable, Sendable {
         hierarchy: [HierarchyNode],
         selectedEntityID: UInt64?,
         renderInfo: RenderInfo,
-        metrics: MetricsInfo
+        metrics: MetricsInfo,
+        systems: [SystemInfo] = []
     ) {
         self.entityCount = entityCount
         self.entities = entities
@@ -23,6 +25,7 @@ public struct EngineSnapshot: Codable, Sendable {
         self.selectedEntityID = selectedEntityID
         self.renderInfo = renderInfo
         self.metrics = metrics
+        self.systems = systems
     }
 
     /// Human-readable text representation for inclusion in LLM system prompts.
@@ -50,6 +53,14 @@ public struct EngineSnapshot: Codable, Sendable {
             }
             lines.append(desc)
         }
+        if !systems.isEmpty {
+            lines.append("")
+            lines.append("Registered systems (by priority):")
+            for sys in systems {
+                let status = sys.isEnabled ? "ON" : "OFF"
+                lines.append("  [\(sys.priority)] \(sys.name) (\(status))")
+            }
+        }
         lines.append("")
         lines.append("Render state: \(renderInfo.drawCallCount) draw calls, \(renderInfo.lightCount) lights, mode=\(renderInfo.renderMode)")
         lines.append("Metrics: \(String(format: "%.1f", metrics.fps)) fps, frame time \(String(format: "%.2f", metrics.frameTime))ms")
@@ -69,7 +80,8 @@ public struct EngineSnapshot: Codable, Sendable {
         hierarchy: [],
         selectedEntityID: nil,
         renderInfo: .empty,
-        metrics: .empty
+        metrics: .empty,
+        systems: []
     )
 }
 
@@ -140,4 +152,16 @@ public struct MetricsInfo: Codable, Sendable {
     }
 
     public static let empty = MetricsInfo(fps: 0, frameTime: 0, totalTime: 0)
+}
+
+public struct SystemInfo: Codable, Sendable {
+    public let name: String
+    public let priority: Int
+    public let isEnabled: Bool
+
+    public init(name: String, priority: Int, isEnabled: Bool) {
+        self.name = name
+        self.priority = priority
+        self.isEnabled = isEnabled
+    }
 }

@@ -280,6 +280,13 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     var gizmoRenderer: GizmoRenderer?
     var debugOverlayRenderer: DebugOverlayRenderer?
 
+    // Per-material rendering
+    var materialPipelineCache: PipelineCache?
+    var skyboxFallbackPipeline: MTLRenderPipelineState?
+    var customSkyboxTexture: MTLTexture?
+    var cachedSkyboxPath: String?
+    var skyboxDepthStencilState: MTLDepthStencilState?
+
     // Post-processing (Game Viewport only)
     var postProcessStack: PostProcessStack?
     var hdrRenderedPipeline: MTLRenderPipelineState?
@@ -316,6 +323,25 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         gridRenderer = GridRenderer(device: device)
         gizmoRenderer = GizmoRenderer(device: device)
         debugOverlayRenderer = DebugOverlayRenderer(device: device)
+
+        if let compiler = shaderCompiler {
+            materialPipelineCache = PipelineCache(compiler: compiler)
+        }
+
+        if let vd = MeshPool.metalVertexDescriptor {
+            MaterialRegistry.shared.warmup(
+                device: device,
+                vertexDescriptor: vd,
+                colorFormat: .bgra8Unorm_srgb,
+                depthFormat: .depth32Float
+            )
+            skyboxFallbackPipeline = MaterialRegistry.shared.compileSkyboxFallback(
+                device: device,
+                vertexDescriptor: vd,
+                colorFormat: .bgra8Unorm_srgb,
+                depthFormat: .depth32Float
+            )
+        }
 
         if viewportID == 0 {
             var wsConfig = DataFlowConfig()
@@ -356,7 +382,6 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 depthFormat: .depth32Float,
                 vertexDescriptor: MeshPool.metalVertexDescriptor
             )
-            // HDR pipeline renders to rgba16Float for post-processing
             hdrRenderedPipeline = try? shaderCompiler?.compilePipeline(
                 vertexSource: defaultVS,
                 fragmentSource: header + ShaderSnippets.defaultFragment,
@@ -952,6 +977,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         // Scene rendering pass
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) {
+            encoder.setFrontFacing(.counterClockwise)
             encoder.setDepthStencilState(device.depthStencilState)
 
             if viewportID == 0 && state.showGrid {
@@ -959,11 +985,22 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 gridRenderer?.draw(encoder: encoder, viewProjectionMatrix: vpMatrix)
             }
 
+            // Skybox pass (before opaque geometry)
+            drawSkybox(encoder: encoder, device: device, pool: pool,
+                       viewMatrix: viewMatrix, projMatrix: projMatrix)
+
             encoder.setDepthStencilState(device.depthStencilState)
-            encoder.setRenderPipelineState(pipeline)
+
+            let usePerMaterial = (viewportID == 0 && state.sceneRenderMode == .rendered) || viewportID == 1
+            if !usePerMaterial {
+                encoder.setRenderPipelineState(pipeline)
+            }
             if useWireframe {
                 encoder.setTriangleFillMode(.lines)
             }
+
+            var lightsData = state.lightingSystem.lights
+            var lightCount = state.lightingSystem.lightCount
 
             for drawCall in state.meshRenderSystem.drawCalls {
                 let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
@@ -975,6 +1012,62 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     time: state.engine.totalTime
                 )
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+
+                if usePerMaterial {
+                    if let materialPSO = resolveMaterialPipeline(for: drawCall.material, device: device) {
+                        encoder.setRenderPipelineState(materialPSO)
+
+                        let rs = drawCall.material.renderState
+                        encoder.setCullMode(rs.cullMode.metalCullMode)
+                        if let dss = materialPipelineCache?.depthStencilState(for: rs, device: device.device) {
+                            encoder.setDepthStencilState(dss)
+                        }
+                    } else {
+                        encoder.setRenderPipelineState(pipeline)
+                        encoder.setCullMode(.none)
+                        encoder.setDepthStencilState(device.depthStencilState)
+                    }
+
+                    // Bind PBR material properties at fragment buffer 2
+                    var gpuMat = GPUMaterialProperties(from: drawCall.material.surfaceProperties)
+                    encoder.setFragmentBytes(&gpuMat, length: MemoryLayout<GPUMaterialProperties>.stride, index: 2)
+
+                    // Bind textures (or 1x1 white placeholder)
+                    let placeholder = MaterialRegistry.shared.placeholderWhiteTexture
+                    let registry = MaterialRegistry.shared
+                    let props = drawCall.material.surfaceProperties
+
+                    if let path = props.albedoTexturePath,
+                       let tex = registry.texture(forPath: path, device: device.device) {
+                        encoder.setFragmentTexture(tex, index: 0)
+                    } else if let ph = placeholder {
+                        encoder.setFragmentTexture(ph, index: 0)
+                    }
+
+                    if let path = props.normalMapPath,
+                       let tex = registry.texture(forPath: path, device: device.device) {
+                        encoder.setFragmentTexture(tex, index: 1)
+                    } else if let ph = placeholder {
+                        encoder.setFragmentTexture(ph, index: 1)
+                    }
+
+                    if let path = props.metallicRoughnessMapPath,
+                       let tex = registry.texture(forPath: path, device: device.device) {
+                        encoder.setFragmentTexture(tex, index: 2)
+                    } else if let ph = placeholder {
+                        encoder.setFragmentTexture(ph, index: 2)
+                    }
+
+                    if drawCall.material.needsLighting && !lightsData.isEmpty {
+                        encoder.setFragmentBytes(&lightsData,
+                                                 length: MemoryLayout<GPULightData>.stride * lightsData.count,
+                                                 index: 3)
+                        encoder.setFragmentBytes(&lightCount,
+                                                 length: MemoryLayout<UInt32>.stride,
+                                                 index: 4)
+                    }
+                }
+
                 if let mesh = pool.mesh(for: drawCall.meshType) {
                     MeshRenderer.draw(mesh: mesh, with: encoder)
                 }
@@ -998,12 +1091,12 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     )
                     encoder.setRenderPipelineState(outlinePSO)
                     encoder.setTriangleFillMode(.fill)
-                    encoder.setCullMode(.back)
+                    encoder.setCullMode(.front)
                     encoder.setVertexBytes(&outlineUniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
                     if let mesh = pool.mesh(for: mc.meshType) {
                         MeshRenderer.draw(mesh: mesh, with: encoder)
                     }
-                    encoder.setCullMode(.none)
+                    encoder.setCullMode(.back)
                 }
 
                 if let tc = state.engine.world.getComponent(TransformComponent.self, from: selected) {
@@ -1094,6 +1187,122 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+    }
+
+    // MARK: - Per-Material Pipeline Resolution
+
+    private func resolveMaterialPipeline(
+        for material: MCMaterial,
+        device: MCMetalDevice
+    ) -> MTLRenderPipelineState? {
+        if MaterialRegistry.shared.isBuiltin(material.id) {
+            return MaterialRegistry.shared.pipelineState(for: material.id)
+        }
+
+        if let unified = material.unifiedShaderSource {
+            return try? materialPipelineCache?.getOrCompile(materialKey: material.pipelineCacheKey) {
+                try shaderCompiler!.compileUnifiedPipeline(
+                    source: unified,
+                    renderState: material.renderState,
+                    colorFormat: .bgra8Unorm_srgb,
+                    depthFormat: .depth32Float,
+                    vertexDescriptor: MeshPool.metalVertexDescriptor
+                )
+            }
+        }
+
+        guard !material.fragmentShaderSource.isEmpty else { return nil }
+
+        let config = material.dataFlowConfig
+        let header = ShaderSnippets.generateSharedHeader(config: config)
+        let vertexSource = header + (material.vertexShaderSource
+            ?? ShaderSnippets.generateDefaultVertexShader(config: config))
+        let fragmentSource = header + material.fragmentShaderSource
+
+        return try? materialPipelineCache?.getOrCompile(materialKey: material.pipelineCacheKey) {
+            try shaderCompiler!.compilePipeline(
+                vertexSource: vertexSource,
+                fragmentSource: fragmentSource,
+                colorFormat: .bgra8Unorm_srgb,
+                depthFormat: .depth32Float,
+                vertexDescriptor: MeshPool.metalVertexDescriptor
+            )
+        }
+    }
+
+    // MARK: - Skybox Rendering
+
+    private func drawSkybox(
+        encoder: MTLRenderCommandEncoder,
+        device: MCMetalDevice,
+        pool: MeshPool,
+        viewMatrix: simd_float4x4,
+        projMatrix: simd_float4x4
+    ) {
+        let skyboxSystem = state.skyboxSystem
+        guard skyboxSystem.isActive else { return }
+
+        skyboxSystem.computeUniforms(viewMatrix: viewMatrix, projectionMatrix: projMatrix)
+
+        // Resolve HDRI texture: scene-specific override > engine default
+        let hdriTexture: MTLTexture? = resolveHDRITexture(device: device)
+
+        let hdriPipeline = MaterialRegistry.shared.pipelineState(for: MaterialRegistry.skyboxMaterialID)
+        let skyboxPSO: MTLRenderPipelineState
+        if hdriTexture != nil, let hPSO = hdriPipeline {
+            skyboxPSO = hPSO
+        } else if let fallback = skyboxFallbackPipeline {
+            skyboxPSO = fallback
+        } else {
+            return
+        }
+
+        if let dss = MaterialRegistry.shared.depthStencilState(for: MaterialRegistry.skyboxMaterialID) {
+            encoder.setDepthStencilState(dss)
+        } else {
+            let desc = MTLDepthStencilDescriptor()
+            desc.depthCompareFunction = .lessEqual
+            desc.isDepthWriteEnabled = false
+            if let fallbackDSS = device.device.makeDepthStencilState(descriptor: desc) {
+                skyboxDepthStencilState = fallbackDSS
+                encoder.setDepthStencilState(fallbackDSS)
+            }
+        }
+
+        encoder.setRenderPipelineState(skyboxPSO)
+        // Skybox is viewed from inside the cube. Outward faces are front-facing;
+        // cull them so only inward-facing (back) triangles remain visible.
+        encoder.setCullMode(.front)
+
+        var skyUniforms = skyboxSystem.skyboxUniforms
+        encoder.setVertexBytes(&skyUniforms, length: MemoryLayout<SkyboxUniforms>.stride, index: 1)
+
+        if let tex = hdriTexture {
+            encoder.setFragmentTexture(tex, index: 0)
+        }
+
+        if let cubeMesh = pool.mesh(for: .cube) {
+            MeshRenderer.draw(mesh: cubeMesh, with: encoder)
+        }
+
+        encoder.setCullMode(.back)
+    }
+
+    /// Resolves the HDRI texture for the current skybox.
+    /// Priority: scene SkyboxComponent path > engine default HDRI.
+    private func resolveHDRITexture(device: MCMetalDevice) -> MTLTexture? {
+        if let customPath = state.skyboxSystem.hdriTexturePath,
+           !customPath.isEmpty {
+            if let cached = customSkyboxTexture, cachedSkyboxPath == customPath {
+                return cached
+            }
+            let url = URL(fileURLWithPath: customPath)
+            let tex = MaterialRegistry.shared.loadSkyboxTexture(from: url, device: device.device)
+            customSkyboxTexture = tex
+            cachedSkyboxPath = customPath
+            return tex
+        }
+        return MaterialRegistry.shared.defaultSkyboxTexture
     }
 }
 #endif

@@ -126,7 +126,7 @@ struct PositionComponent: Component {
     final class CountSystem: System, @unchecked Sendable {
         var isEnabled: Bool = true
         var tickCount = 0
-        func update(world: World, deltaTime: Float) {
+        func update(context: UpdateContext) {
             tickCount += 1
         }
     }

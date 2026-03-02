@@ -17,6 +17,9 @@ public struct GPULightData: Sendable {
 }
 
 /// Collects all light entities and prepares GPU-ready light data.
+///
+/// Outputs are consumed by the renderer to bind light data at buffer index 3
+/// and light count at buffer index 4 for lit materials.
 public final class LightingSystem: System {
     public nonisolated(unsafe) var isEnabled: Bool = true
     public var priority: Int { -80 }
@@ -26,11 +29,21 @@ public final class LightingSystem: System {
     
     /// Maximum number of lights supported.
     public nonisolated(unsafe) var maxLights: Int = 16
+
+    /// A default directional light used when no light entities exist in the scene.
+    public static let defaultDirectionalLight: GPULightData = {
+        var light = GPULightData()
+        light.direction = SIMD3<Float>(0.4, -0.9, -0.5)
+        light.color = SIMD3<Float>(1, 1, 1)
+        light.intensity = 1.0
+        light.type = 0
+        return light
+    }()
     
     public init() {}
     
-    public func update(world: World, deltaTime: Float) {
-        let lightEntities = world.query(TransformComponent.self, LightComponent.self)
+    public func update(context: UpdateContext) {
+        let lightEntities = context.world.query(TransformComponent.self, LightComponent.self)
         
         var gpuLights: [GPULightData] = []
         
@@ -57,7 +70,21 @@ public final class LightingSystem: System {
             
             gpuLights.append(gpu)
         }
+
+        if gpuLights.isEmpty {
+            gpuLights.append(Self.defaultDirectionalLight)
+        }
         
         lights = gpuLights
+    }
+
+    /// The number of active lights (clamped to maxLights).
+    public var lightCount: UInt32 {
+        UInt32(min(lights.count, maxLights))
+    }
+
+    /// Total byte size of the light data buffer for GPU upload.
+    public var lightBufferSize: Int {
+        lights.count * MemoryLayout<GPULightData>.stride
     }
 }

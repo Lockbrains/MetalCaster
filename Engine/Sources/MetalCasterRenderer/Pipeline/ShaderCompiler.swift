@@ -57,6 +57,48 @@ public final class ShaderCompiler {
         return try device.makeRenderPipelineState(descriptor: desc)
     }
 
+    /// Compiles a unified MSL source (vertex + fragment in one string) with full render state control.
+    ///
+    /// - Parameters:
+    ///   - source: Complete MSL source containing both `vertex_main` and `fragment_main`.
+    ///   - renderState: The render state configuration for blend mode.
+    ///   - colorFormat: The pixel format for the color attachment.
+    ///   - depthFormat: The pixel format for the depth attachment (or .invalid).
+    ///   - vertexDescriptor: Optional Metal vertex descriptor for mesh pipelines.
+    ///   - vertexFunctionName: The vertex function name (default "vertex_main").
+    ///   - fragmentFunctionName: The fragment function name (default "fragment_main").
+    /// - Returns: A compiled MTLRenderPipelineState.
+    public func compileUnifiedPipeline(
+        source: String,
+        renderState: MCRenderState = .opaque,
+        colorFormat: MTLPixelFormat = .bgra8Unorm,
+        depthFormat: MTLPixelFormat = .invalid,
+        vertexDescriptor: MTLVertexDescriptor? = nil,
+        vertexFunctionName: String = "vertex_main",
+        fragmentFunctionName: String = "fragment_main"
+    ) throws -> MTLRenderPipelineState {
+        let lib = try compile(source: source)
+
+        guard let vertexFunc = lib.makeFunction(name: vertexFunctionName),
+              let fragFunc = lib.makeFunction(name: fragmentFunctionName) else {
+            throw ShaderCompilationError.missingEntryPoint
+        }
+
+        let desc = MTLRenderPipelineDescriptor()
+        desc.vertexFunction = vertexFunc
+        desc.fragmentFunction = fragFunc
+        desc.colorAttachments[0].pixelFormat = colorFormat
+        desc.depthAttachmentPixelFormat = depthFormat
+
+        renderState.blendMode.apply(to: desc.colorAttachments[0])
+
+        if let vd = vertexDescriptor {
+            desc.vertexDescriptor = vd
+        }
+
+        return try device.makeRenderPipelineState(descriptor: desc)
+    }
+
     /// Compiles a self-contained fullscreen shader (both vertex and fragment in one source).
     public func compileFullscreenPipeline(
         source: String,

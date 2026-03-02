@@ -1,8 +1,13 @@
 import SwiftUI
 import simd
+import UniformTypeIdentifiers
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
+
+#if canImport(AppKit)
+import AppKit
+#endif
 
 struct InspectorView: View {
     @Environment(EditorState.self) private var state
@@ -31,6 +36,14 @@ struct InspectorView: View {
                     }
                     if state.engine.world.hasComponent(MeshComponent.self, on: entity) {
                         meshSection(entity)
+                        sectionDivider()
+                    }
+                    if state.engine.world.hasComponent(MaterialComponent.self, on: entity) {
+                        materialSection(entity)
+                        sectionDivider()
+                    }
+                    if state.engine.world.hasComponent(SkyboxComponent.self, on: entity) {
+                        skyboxSection(entity)
                         sectionDivider()
                     }
                     addComponentSection(entity)
@@ -486,6 +499,509 @@ struct InspectorView: View {
     }
 
     @ViewBuilder
+    private func materialSection(_ entity: Entity) -> some View {
+        let mat = state.engine.world.getComponent(MaterialComponent.self, from: entity)?.material
+
+        MCSection(title: "Material") {
+            HStack(spacing: 4) {
+                Menu {
+                    Section("New") {
+                        Button("Lit Material") {
+                            createMaterial(on: entity, basedOn: MaterialRegistry.litMaterialID, name: "Custom Lit")
+                        }
+                        Button("Unlit Material") {
+                            createMaterial(on: entity, basedOn: MaterialRegistry.unlitMaterialID, name: "Custom Unlit")
+                        }
+                        Button("Toon Material") {
+                            createMaterial(on: entity, basedOn: MaterialRegistry.toonMaterialID, name: "Custom Toon")
+                        }
+                    }
+
+                    Divider()
+
+                    Section("Project Materials") {
+                        let entries = state.assetDatabase.entries(in: .materials, subfolder: nil)
+                            .filter { $0.fileExtension == "mcmat" }
+                        if entries.isEmpty {
+                            Text("No materials in project")
+                        } else {
+                            ForEach(entries) { entry in
+                                Button(entry.name) {
+                                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                                        state.assignMaterialAsset(from: url)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button("Load from File...") {
+                        pickMaterialFile(entity: entity)
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MCTheme.textTertiary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                if mat?.materialType == .custom || mat != nil {
+                    Button {
+                        saveMaterialToProject(mat: mat)
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Save Material to Project")
+                }
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                // Material name (editable for custom)
+                if mat?.materialType == .custom {
+                    TextField("Name", text: Binding(
+                        get: { mat?.name ?? "" },
+                        set: { newName in
+                            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                                mc.material.name = newName
+                            }
+                        }
+                    ))
+                    .textFieldStyle(.plain)
+                    .mcInputStyle()
+                } else {
+                    HStack {
+                        Text("Name")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                            .frame(width: 70, alignment: .leading)
+                        Text(mat?.name ?? "—")
+                            .font(MCTheme.fontBody)
+                            .foregroundStyle(MCTheme.textPrimary)
+                    }
+                }
+
+                // Shader selector
+                HStack(spacing: 8) {
+                    Picker("Shader", selection: Binding(
+                        get: { materialShaderTag(for: mat) },
+                        set: { tag in
+                            if tag == "custom" { return }
+                            switchShader(on: entity, to: tag)
+                        }
+                    )) {
+                        Text("Lit").tag("lit")
+                        Text("Unlit").tag("unlit")
+                        Text("Toon").tag("toon")
+                        if materialShaderTag(for: mat) == "custom" {
+                            Text("Custom").tag("custom")
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Menu {
+                        let shaderEntries = state.assetDatabase.entries(in: .shaders, subfolder: nil)
+                            .filter { $0.fileExtension == "metal" }
+                        if shaderEntries.isEmpty {
+                            Text("No shaders in project")
+                        } else {
+                            ForEach(shaderEntries) { entry in
+                                Button(entry.name) {
+                                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                                        loadCustomShader(on: entity, from: url)
+                                    }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Load from File...") {
+                            pickShaderFile(entity: entity)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Load Custom Shader")
+                }
+
+                sectionDivider()
+
+                // Base Color
+                materialColorRow(label: "Base Color", entity: entity,
+                    get: { mat?.surfaceProperties.baseColor ?? SIMD3<Float>(0.8, 0.8, 0.8) },
+                    set: { color in
+                        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                            mc.material.surfaceProperties.baseColor = color
+                        }
+                    })
+
+                // PBR sliders (Lit and Toon only)
+                if materialShaderTag(for: mat) == "lit" {
+                    materialSlider(label: "Metallic", entity: entity, range: 0...1,
+                        get: { mat?.surfaceProperties.metallic ?? 0 },
+                        set: { val in
+                            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                                mc.material.surfaceProperties.metallic = val
+                            }
+                        })
+
+                    materialSlider(label: "Roughness", entity: entity, range: 0.04...1,
+                        get: { mat?.surfaceProperties.roughness ?? 0.5 },
+                        set: { val in
+                            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                                mc.material.surfaceProperties.roughness = val
+                            }
+                        })
+                }
+
+                // Emissive
+                materialColorRow(label: "Emissive", entity: entity,
+                    get: { mat?.surfaceProperties.emissiveColor ?? .zero },
+                    set: { color in
+                        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                            mc.material.surfaceProperties.emissiveColor = color
+                        }
+                    })
+
+                materialSlider(label: "Emissive Intensity", entity: entity, range: 0...10,
+                    get: { mat?.surfaceProperties.emissiveIntensity ?? 0 },
+                    set: { val in
+                        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                            mc.material.surfaceProperties.emissiveIntensity = val
+                        }
+                    })
+
+                sectionDivider()
+
+                // Texture slots
+                materialTextureRow(label: "Albedo Map", entity: entity,
+                    get: { mat?.surfaceProperties.albedoTexturePath },
+                    set: { path in
+                        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                            mc.material.surfaceProperties.albedoTexturePath = path
+                        }
+                    })
+
+                if materialShaderTag(for: mat) == "lit" {
+                    materialTextureRow(label: "Normal Map", entity: entity,
+                        get: { mat?.surfaceProperties.normalMapPath },
+                        set: { path in
+                            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                                mc.material.surfaceProperties.normalMapPath = path
+                            }
+                        })
+
+                    materialTextureRow(label: "Metallic/Roughness", entity: entity,
+                        get: { mat?.surfaceProperties.metallicRoughnessMapPath },
+                        set: { path in
+                            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                                mc.material.surfaceProperties.metallicRoughnessMapPath = path
+                            }
+                        })
+                }
+
+                sectionDivider()
+
+                // Render state info
+                HStack {
+                    Text("Blend")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Text(mat?.renderState.blendMode.rawValue.capitalized ?? "Opaque")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textTertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Material Helpers
+
+    private func materialShaderTag(for mat: MCMaterial?) -> String {
+        guard let mat else { return "lit" }
+        if MaterialRegistry.shared.isBuiltin(mat.id) {
+            if mat.id == MaterialRegistry.unlitMaterialID { return "unlit" }
+            if mat.id == MaterialRegistry.toonMaterialID { return "toon" }
+            return "lit"
+        }
+        // Custom material: check name hints
+        let name = mat.name.lowercased()
+        if name.contains("unlit") { return "unlit" }
+        if name.contains("toon") { return "toon" }
+        if name.contains("lit") && !name.contains("unlit") { return "lit" }
+        // If it has a unified source that doesn't match builtins, it's custom
+        if mat.unifiedShaderSource != nil { return "custom" }
+        return "lit"
+    }
+
+    private func switchShader(on entity: Entity, to tag: String) {
+        let builtinID: UUID
+        switch tag {
+        case "unlit": builtinID = MaterialRegistry.unlitMaterialID
+        case "toon":  builtinID = MaterialRegistry.toonMaterialID
+        default:      builtinID = MaterialRegistry.litMaterialID
+        }
+        guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
+        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+            let preserved = mc.material.surfaceProperties
+            mc.material = builtin
+            mc.material.surfaceProperties = preserved
+        }
+    }
+
+    private func createMaterial(on entity: Entity, basedOn builtinID: UUID, name: String) {
+        guard let builtin = MaterialRegistry.shared.builtinMaterial(builtinID) else { return }
+        let custom = MCMaterial(
+            name: name,
+            materialType: .custom,
+            renderState: builtin.renderState,
+            vertexShaderSource: builtin.vertexShaderSource,
+            fragmentShaderSource: builtin.fragmentShaderSource,
+            unifiedShaderSource: builtin.unifiedShaderSource,
+            postProcessSources: builtin.postProcessSources,
+            dataFlowConfig: builtin.dataFlowConfig,
+            surfaceProperties: MCMaterialProperties()
+        )
+        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+            mc.material = custom
+        }
+    }
+
+    @ViewBuilder
+    private func materialColorRow(label: String, entity: Entity,
+                                  get: @escaping () -> SIMD3<Float>,
+                                  set: @escaping (SIMD3<Float>) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            ColorPicker("", selection: Binding(
+                get: {
+                    let c = get()
+                    return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                },
+                set: { newColor in
+                    if let components = newColor.cgColor?.components, components.count >= 3 {
+                        set(SIMD3<Float>(Float(components[0]), Float(components[1]), Float(components[2])))
+                    }
+                }
+            ), supportsOpacity: false)
+            .labelsHidden()
+        }
+    }
+
+    @ViewBuilder
+    private func materialSlider(label: String, entity: Entity, range: ClosedRange<Float>,
+                                get: @escaping () -> Float,
+                                set: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            Slider(value: Binding(
+                get: get,
+                set: set
+            ), in: range)
+            Text(String(format: "%.2f", get()))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func materialTextureRow(label: String, entity: Entity,
+                                    get: @escaping () -> String?,
+                                    set: @escaping (String?) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                Spacer()
+                if get() != nil {
+                    Button {
+                        set(nil)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Button {
+                pickTextureFile { url in
+                    set(url?.path)
+                }
+            } label: {
+                HStack {
+                    Image(systemName: get() != nil ? "photo.fill" : "photo")
+                        .font(.system(size: 10))
+                        .foregroundStyle(get() != nil ? MCTheme.statusGreen : MCTheme.textTertiary)
+                    Text(get().map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(MCTheme.inputBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(MCTheme.inputBorder, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func pickTextureFile(completion: @escaping (URL?) -> Void) {
+        #if canImport(AppKit)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [
+            .png, .jpeg,
+            .init(filenameExtension: "exr")!,
+            .init(filenameExtension: "hdr")!,
+            .tiff
+        ]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a texture file"
+        panel.begin { response in
+            DispatchQueue.main.async {
+                completion(response == .OK ? panel.url : nil)
+            }
+        }
+        #endif
+    }
+
+    private func pickMaterialFile(entity: Entity) {
+        #if canImport(AppKit)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "mcmat")!]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a material file (.mcmat)"
+        panel.begin { response in
+            DispatchQueue.main.async {
+                if response == .OK, let url = panel.url {
+                    state.assignMaterialAsset(from: url)
+                }
+            }
+        }
+        #endif
+    }
+
+    private func loadCustomShader(on entity: Entity, from url: URL) {
+        guard let source = try? String(contentsOf: url, encoding: .utf8) else {
+            print("[MetalCaster] Failed to read shader file: \(url.path)")
+            return
+        }
+        state.updateComponent(MaterialComponent.self, on: entity) { mc in
+            mc.material.materialType = .custom
+            mc.material.unifiedShaderSource = source
+        }
+    }
+
+    private func pickShaderFile(entity: Entity) {
+        #if canImport(AppKit)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.init(filenameExtension: "metal")!]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a shader file (.metal)"
+        panel.begin { response in
+            DispatchQueue.main.async {
+                if response == .OK, let url = panel.url {
+                    loadCustomShader(on: entity, from: url)
+                }
+            }
+        }
+        #endif
+    }
+
+    private func saveMaterialToProject(mat: MCMaterial?) {
+        guard let mat else { return }
+        guard let dir = state.projectManager.directoryURL(for: .materials) else { return }
+        let sanitized = mat.name.replacingOccurrences(of: " ", with: "_")
+        let fileURL = dir.appendingPathComponent("\(sanitized).mcmat")
+        do {
+            try mat.save(to: fileURL)
+            let relPath = "Materials/\(sanitized).mcmat"
+            _ = state.projectManager.ensureMeta(for: relPath, type: .materials)
+            state.refreshAssetBrowser()
+        } catch {
+            print("[MetalCaster] Failed to save material: \(error)")
+        }
+    }
+
+    @ViewBuilder
+    private func skyboxSection(_ entity: Entity) -> some View {
+        let sky = state.engine.world.getComponent(SkyboxComponent.self, from: entity)
+
+        MCSection(title: "Skybox") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("HDRI")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Text(sky?.hdriTexturePath ?? "None (gradient)")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                HStack {
+                    Text("Exposure")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { sky?.exposure ?? 1.0 },
+                        set: { val in state.updateComponent(SkyboxComponent.self, on: entity) { $0.exposure = val } }
+                    ), in: 0.1...5.0)
+                    Text(String(format: "%.2f", sky?.exposure ?? 1.0))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                HStack {
+                    Text("Rotation")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { (sky?.rotation ?? 0) * 180 / .pi },
+                        set: { deg in state.updateComponent(SkyboxComponent.self, on: entity) { $0.rotation = deg * .pi / 180 } }
+                    ), in: 0...360)
+                    Text(String(format: "%.0f°", (sky?.rotation ?? 0) * 180 / .pi))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private func addComponentSection(_ entity: Entity) -> some View {
         let world = state.engine.world
         HStack {
@@ -494,7 +1010,21 @@ struct InspectorView: View {
                 if !world.hasComponent(MeshComponent.self, on: entity) {
                     Button("Mesh") {
                         world.addComponent(MeshComponent(), to: entity)
-                        world.addComponent(MaterialComponent(), to: entity)
+                        if !world.hasComponent(MaterialComponent.self, on: entity) {
+                            world.addComponent(
+                                MaterialComponent(material: MaterialRegistry.litMaterial),
+                                to: entity
+                            )
+                        }
+                        state.worldRevision += 1
+                    }
+                }
+                if !world.hasComponent(MaterialComponent.self, on: entity) {
+                    Button("Material") {
+                        world.addComponent(
+                            MaterialComponent(material: MaterialRegistry.litMaterial),
+                            to: entity
+                        )
                         state.worldRevision += 1
                     }
                 }
@@ -507,6 +1037,12 @@ struct InspectorView: View {
                 if !world.hasComponent(LightComponent.self, on: entity) {
                     Button("Light") {
                         world.addComponent(LightComponent(), to: entity)
+                        state.worldRevision += 1
+                    }
+                }
+                if !world.hasComponent(SkyboxComponent.self, on: entity) {
+                    Button("Skybox") {
+                        world.addComponent(SkyboxComponent(), to: entity)
                         state.worldRevision += 1
                     }
                 }

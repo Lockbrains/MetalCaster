@@ -10,6 +10,7 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
     case shaders   = "Shaders"
     case audio     = "Audio"
     case prefabs   = "Prefabs"
+    case gameplay  = "Gameplay"
 
     public var id: String { rawValue }
 
@@ -24,6 +25,7 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
         case .shaders:   return "function"
         case .audio:     return "speaker.wave.2"
         case .prefabs:   return "square.on.square"
+        case .gameplay:  return "swift"
         }
     }
 
@@ -36,6 +38,7 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
         case .shaders:   return ["metal"]
         case .audio:     return ["wav", "mp3", "aac", "m4a", "ogg"]
         case .prefabs:   return ["mcprefab"]
+        case .gameplay:  return ["swift"]
         }
     }
 

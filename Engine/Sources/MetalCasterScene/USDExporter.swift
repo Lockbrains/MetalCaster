@@ -55,6 +55,9 @@ public final class USDExporter {
             if let mgr = world.getComponent(ManagerComponent.self, from: entity) {
                 entry.manager = mgr
             }
+            if let sky = world.getComponent(SkyboxComponent.self, from: entity) {
+                entry.skybox = sky
+            }
             
             sidecar.entities.append(entry)
         }
@@ -248,5 +251,6 @@ public struct SceneSidecar: Codable {
         public var material: MCMaterial?
         public var camera: CameraComponent?
         public var manager: ManagerComponent?
+        public var skybox: SkyboxComponent?
     }
 }

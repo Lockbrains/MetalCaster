@@ -54,6 +54,48 @@ struct MetalCasterEditorApp: App {
                 .disabled(editorState == nil)
             }
 
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    editorState?.undoLast()
+                }
+                .keyboardShortcut("z")
+                .disabled(editorState?.undoStack.isEmpty ?? true)
+
+                Button("Redo") {
+                    editorState?.redoLast()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(editorState?.redoStack.isEmpty ?? true)
+            }
+
+            CommandGroup(replacing: .pasteboard) {
+                Button("Copy") {
+                    editorState?.copySelectedEntity()
+                }
+                .keyboardShortcut("c")
+                .disabled(editorState?.selectedEntity == nil)
+
+                Button("Paste") {
+                    editorState?.pasteEntity()
+                }
+                .keyboardShortcut("v")
+                .disabled(editorState?.entityClipboard == nil)
+
+                Divider()
+
+                Button("Duplicate") {
+                    editorState?.duplicateSelectedEntity()
+                }
+                .keyboardShortcut("d")
+                .disabled(editorState?.selectedEntity == nil)
+
+                Button("Delete") {
+                    editorState?.deleteSelectedEntity()
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(editorState?.selectedEntity == nil)
+            }
+
             CommandGroup(replacing: .saveItem) {
                 Button("Save Scene") {
                     editorState?.saveScene()
@@ -69,38 +111,26 @@ struct MetalCasterEditorApp: App {
             }
 
             CommandMenu("Scene") {
-                Button("Add Empty Entity") {
+                Button("Empty Entity") {
                     editorState?.addEmptyEntity()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(editorState == nil)
 
-                Button("Add Camera") {
-                    editorState?.addCamera()
-                }
-                .disabled(editorState == nil)
-
                 Divider()
 
-                Menu("Add Primitive") {
-                    ForEach(MeshType.builtinPrimitives, id: \.displayName) { meshType in
-                        Button("Add \(meshType.displayName)") {
-                            editorState?.addMeshEntity(name: meshType.displayName, meshType: meshType)
+                Menu("Prefab") {
+                    Menu("Mesh") {
+                        ForEach(MeshType.builtinPrimitives, id: \.displayName) { meshType in
+                            Button(meshType.displayName) {
+                                editorState?.addMeshEntity(name: meshType.displayName, meshType: meshType)
+                            }
                         }
                     }
-                }
-                .disabled(editorState == nil)
-
-                Menu("Add Light") {
-                    Button("Directional Light") {
-                        editorState?.addDirectionalLight()
-                    }
-                    Button("Point Light") {
-                        editorState?.addPointLight()
-                    }
-                    Button("Spot Light") {
-                        editorState?.addSpotLight()
-                    }
+                    Button("Camera") { editorState?.addCamera() }
+                    Button("Directional Light") { editorState?.addDirectionalLight() }
+                    Button("Point Light") { editorState?.addPointLight() }
+                    Button("Spot Light") { editorState?.addSpotLight() }
                 }
                 .disabled(editorState == nil)
 

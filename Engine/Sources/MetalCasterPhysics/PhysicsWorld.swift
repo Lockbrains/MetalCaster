@@ -71,7 +71,9 @@ public final class PhysicsSystem: System {
     
     public init() {}
     
-    public func update(world: World, deltaTime: Float) {
+    public func update(context: UpdateContext) {
+        let world = context.world
+        let dt = context.time.deltaTime
         let bodies = world.query(TransformComponent.self, PhysicsBodyComponent.self)
         
         for (entity, tc, body) in bodies {
@@ -81,10 +83,10 @@ public final class PhysicsSystem: System {
             var updatedTC = tc
             
             if body.useGravity {
-                updatedBody.velocity += gravity * deltaTime
+                updatedBody.velocity += gravity * dt
             }
             
-            updatedTC.transform.position += updatedBody.velocity * deltaTime
+            updatedTC.transform.position += updatedBody.velocity * dt
             
             // Simple ground plane collision at y=0
             if updatedTC.transform.position.y < 0 {
