@@ -63,6 +63,14 @@ struct InspectorView: View {
                     skyboxSection(entity)
                     sectionDivider()
                 }
+                if state.engine.world.hasComponent(PostProcessVolumeComponent.self, on: entity) {
+                    postProcessVolumeSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(GameplayScriptRef.self, on: entity) {
+                    gameplayScriptSection(entity)
+                    sectionDivider()
+                }
                 addComponentSection(entity)
             }
             .padding(MCTheme.panelPadding)
@@ -429,12 +437,14 @@ struct InspectorView: View {
                     cameraFOVRow(entity)
                 }
 
-                liveFloatRow(label: "Near", entity: entity,
-                    get: { cam?.nearZ ?? 0.1 },
-                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.nearZ = val } })
-                liveFloatRow(label: "Far", entity: entity,
-                    get: { cam?.farZ ?? 1000 },
-                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.farZ = val } })
+                HStack(spacing: 12) {
+                    liveFloatRow(label: "Near", entity: entity,
+                        get: { cam?.nearZ ?? 0.1 },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.nearZ = val } })
+                    liveFloatRow(label: "Far", entity: entity,
+                        get: { cam?.farZ ?? 1000 },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.farZ = val } })
+                }
 
                 if cam?.projection == .orthographic {
                     liveFloatRow(label: "Ortho Size", entity: entity,
@@ -479,17 +489,19 @@ struct InspectorView: View {
         // MARK: Rendering
         MCSection(title: "Rendering") {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Post Processing", isOn: Binding(
-                    get: { cam?.allowPostProcessing ?? true },
-                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowPostProcessing = val } }
-                ))
-                .foregroundStyle(MCTheme.textSecondary)
+                HStack(spacing: 16) {
+                    Toggle("Post Processing", isOn: Binding(
+                        get: { cam?.allowPostProcessing ?? true },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowPostProcessing = val } }
+                    ))
+                    .foregroundStyle(MCTheme.textSecondary)
 
-                Toggle("HDR", isOn: Binding(
-                    get: { cam?.allowHDR ?? true },
-                    set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowHDR = val } }
-                ))
-                .foregroundStyle(MCTheme.textSecondary)
+                    Toggle("HDR", isOn: Binding(
+                        get: { cam?.allowHDR ?? true },
+                        set: { val in state.updateComponent(CameraComponent.self, on: entity) { $0.allowHDR = val } }
+                    ))
+                    .foregroundStyle(MCTheme.textSecondary)
+                }
 
                 Picker("Background", selection: Binding(
                     get: { cam?.backgroundType ?? .solidColor },
@@ -1453,6 +1465,739 @@ struct InspectorView: View {
         }
     }
 
+    // MARK: - Post Process Volume Section
+
+    @ViewBuilder
+    private func postProcessVolumeSection(_ entity: Entity) -> some View {
+        let vol = state.engine.world.getComponent(PostProcessVolumeComponent.self, from: entity)
+
+        MCSection(title: "Post Process Volume") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Global (Infinite)", isOn: Binding(
+                    get: { vol?.isGlobal ?? true },
+                    set: { val in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.isGlobal = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                if !(vol?.isGlobal ?? true) {
+                    liveVec3Row(label: "Extents", entity: entity,
+                        get: { vol?.volumeExtents ?? SIMD3<Float>(10, 10, 10) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.volumeExtents = v } },
+                        step: 0.5)
+                    ppSlider(label: "Blend Dist", entity: entity, range: 0...20,
+                        get: { vol?.blendDistance ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.blendDistance = v } })
+                }
+
+                ppIntRow(label: "Priority", entity: entity,
+                    get: { vol?.priority ?? 0 },
+                    set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.priority = v } })
+            }
+        }
+
+        ppEffectBloom(entity, vol: vol)
+        ppEffectChromaticAberration(entity, vol: vol)
+        ppEffectColorAdjustments(entity, vol: vol)
+        ppEffectChannelMixer(entity, vol: vol)
+        ppEffectDepthOfField(entity, vol: vol)
+        ppEffectFilmGrain(entity, vol: vol)
+        ppEffectLensDistortion(entity, vol: vol)
+        ppEffectLiftGammaGain(entity, vol: vol)
+        ppEffectMotionBlur(entity, vol: vol)
+        ppEffectPaniniProjection(entity, vol: vol)
+        ppEffectShadowsMidtonesHighlights(entity, vol: vol)
+        ppEffectSplitToning(entity, vol: vol)
+        ppEffectTonemapping(entity, vol: vol)
+        ppEffectVignette(entity, vol: vol)
+        ppEffectWhiteBalance(entity, vol: vol)
+        ppEffectAmbientOcclusion(entity, vol: vol)
+        ppEffectAntiAliasing(entity, vol: vol)
+        ppEffectFullscreenBlur(entity, vol: vol)
+        ppEffectFullscreenOutline(entity, vol: vol)
+    }
+
+    // MARK: - PP Effect Sections
+
+    @ViewBuilder
+    private func ppEffectBloom(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Bloom", trailing: {
+            ppToggle(entity: entity, get: { vol?.bloom.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.bloom.enabled = v } })
+        }) {
+            if vol?.bloom.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Threshold", entity: entity, range: 0...5,
+                        get: { vol?.bloom.threshold ?? 0.9 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.bloom.threshold = v } })
+                    ppSlider(label: "Intensity", entity: entity, range: 0...10,
+                        get: { vol?.bloom.intensity ?? 1.0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.bloom.intensity = v } })
+                    ppSlider(label: "Scatter", entity: entity, range: 0...1,
+                        get: { vol?.bloom.scatter ?? 0.7 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.bloom.scatter = v } })
+                    ppColorRow(label: "Tint", entity: entity,
+                        get: { vol?.bloom.tint ?? SIMD3<Float>(1, 1, 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.bloom.tint = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectChromaticAberration(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Chromatic Aberration", trailing: {
+            ppToggle(entity: entity, get: { vol?.chromaticAberration.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.chromaticAberration.enabled = v } })
+        }) {
+            if vol?.chromaticAberration.enabled == true {
+                ppSlider(label: "Intensity", entity: entity, range: 0...1,
+                    get: { vol?.chromaticAberration.intensity ?? 0.1 },
+                    set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.chromaticAberration.intensity = v } })
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectColorAdjustments(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Color Adjustments", trailing: {
+            ppToggle(entity: entity, get: { vol?.colorAdjustments.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.enabled = v } })
+        }) {
+            if vol?.colorAdjustments.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Post Exposure", entity: entity, range: -5...5,
+                        get: { vol?.colorAdjustments.postExposure ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.postExposure = v } })
+                    ppSlider(label: "Contrast", entity: entity, range: -100...100,
+                        get: { vol?.colorAdjustments.contrast ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.contrast = v } })
+                    ppColorRow(label: "Color Filter", entity: entity,
+                        get: { vol?.colorAdjustments.colorFilter ?? SIMD3<Float>(1, 1, 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.colorFilter = v } })
+                    ppSlider(label: "Hue Shift", entity: entity, range: -180...180,
+                        get: { vol?.colorAdjustments.hueShift ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.hueShift = v } })
+                    ppSlider(label: "Saturation", entity: entity, range: -100...100,
+                        get: { vol?.colorAdjustments.saturation ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.colorAdjustments.saturation = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectChannelMixer(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Channel Mixer", trailing: {
+            ppToggle(entity: entity, get: { vol?.channelMixer.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.enabled = v } })
+        }) {
+            if vol?.channelMixer.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Red Output").font(MCTheme.fontCaption).foregroundStyle(MCTheme.textSecondary)
+                    ppSlider(label: "R", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.redOutRed ?? 100 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.redOutRed = v } })
+                    ppSlider(label: "G", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.redOutGreen ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.redOutGreen = v } })
+                    ppSlider(label: "B", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.redOutBlue ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.redOutBlue = v } })
+                    Text("Green Output").font(MCTheme.fontCaption).foregroundStyle(MCTheme.textSecondary)
+                    ppSlider(label: "R", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.greenOutRed ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.greenOutRed = v } })
+                    ppSlider(label: "G", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.greenOutGreen ?? 100 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.greenOutGreen = v } })
+                    ppSlider(label: "B", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.greenOutBlue ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.greenOutBlue = v } })
+                    Text("Blue Output").font(MCTheme.fontCaption).foregroundStyle(MCTheme.textSecondary)
+                    ppSlider(label: "R", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.blueOutRed ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.blueOutRed = v } })
+                    ppSlider(label: "G", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.blueOutGreen ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.blueOutGreen = v } })
+                    ppSlider(label: "B", entity: entity, range: -200...200,
+                        get: { vol?.channelMixer.blueOutBlue ?? 100 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.channelMixer.blueOutBlue = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectDepthOfField(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Depth of Field", trailing: {
+            ppToggle(entity: entity, get: { vol?.depthOfField.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.depthOfField.enabled = v } })
+        }) {
+            if vol?.depthOfField.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Mode", selection: Binding(
+                        get: { vol?.depthOfField.mode ?? .gaussian },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.depthOfField.mode = v } }
+                    )) {
+                        ForEach(DoFMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+
+                    ppSlider(label: "Focus Dist", entity: entity, range: 0.1...100,
+                        get: { vol?.depthOfField.focusDistance ?? 10 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.depthOfField.focusDistance = v } })
+                    ppSlider(label: "Aperture", entity: entity, range: 1...22,
+                        get: { vol?.depthOfField.aperture ?? 5.6 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.depthOfField.aperture = v } })
+                    ppSlider(label: "Focal Length", entity: entity, range: 10...300,
+                        get: { vol?.depthOfField.focalLength ?? 50 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.depthOfField.focalLength = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectFilmGrain(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Film Grain", trailing: {
+            ppToggle(entity: entity, get: { vol?.filmGrain.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.filmGrain.enabled = v } })
+        }) {
+            if vol?.filmGrain.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Type", selection: Binding(
+                        get: { vol?.filmGrain.type ?? .medium },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.filmGrain.type = v } }
+                    )) {
+                        ForEach(FilmGrainType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+
+                    ppSlider(label: "Intensity", entity: entity, range: 0...1,
+                        get: { vol?.filmGrain.intensity ?? 0.5 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.filmGrain.intensity = v } })
+                    ppSlider(label: "Response", entity: entity, range: 0...1,
+                        get: { vol?.filmGrain.response ?? 0.8 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.filmGrain.response = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectLensDistortion(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Lens Distortion", trailing: {
+            ppToggle(entity: entity, get: { vol?.lensDistortion.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.lensDistortion.enabled = v } })
+        }) {
+            if vol?.lensDistortion.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Intensity", entity: entity, range: -1...1,
+                        get: { vol?.lensDistortion.intensity ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.lensDistortion.intensity = v } })
+                    ppSlider(label: "X Multiply", entity: entity, range: 0...1,
+                        get: { vol?.lensDistortion.xMultiplier ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.lensDistortion.xMultiplier = v } })
+                    ppSlider(label: "Y Multiply", entity: entity, range: 0...1,
+                        get: { vol?.lensDistortion.yMultiplier ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.lensDistortion.yMultiplier = v } })
+                    ppSlider(label: "Scale", entity: entity, range: 0.01...5,
+                        get: { vol?.lensDistortion.scale ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.lensDistortion.scale = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectLiftGammaGain(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Lift Gamma Gain", trailing: {
+            ppToggle(entity: entity, get: { vol?.liftGammaGain.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.liftGammaGain.enabled = v } })
+        }) {
+            if vol?.liftGammaGain.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppColorRow(label: "Lift", entity: entity,
+                        get: { SIMD3<Float>(vol?.liftGammaGain.lift.x ?? 1, vol?.liftGammaGain.lift.y ?? 1, vol?.liftGammaGain.lift.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.liftGammaGain.lift = SIMD4<Float>(v.x, v.y, v.z, $0.liftGammaGain.lift.w) } })
+                    ppColorRow(label: "Gamma", entity: entity,
+                        get: { SIMD3<Float>(vol?.liftGammaGain.gamma.x ?? 1, vol?.liftGammaGain.gamma.y ?? 1, vol?.liftGammaGain.gamma.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.liftGammaGain.gamma = SIMD4<Float>(v.x, v.y, v.z, $0.liftGammaGain.gamma.w) } })
+                    ppColorRow(label: "Gain", entity: entity,
+                        get: { SIMD3<Float>(vol?.liftGammaGain.gain.x ?? 1, vol?.liftGammaGain.gain.y ?? 1, vol?.liftGammaGain.gain.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.liftGammaGain.gain = SIMD4<Float>(v.x, v.y, v.z, $0.liftGammaGain.gain.w) } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectMotionBlur(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Motion Blur", trailing: {
+            ppToggle(entity: entity, get: { vol?.motionBlur.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.motionBlur.enabled = v } })
+        }) {
+            if vol?.motionBlur.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Intensity", entity: entity, range: 0...1,
+                        get: { vol?.motionBlur.intensity ?? 0.5 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.motionBlur.intensity = v } })
+                    ppIntRow(label: "Quality", entity: entity,
+                        get: { vol?.motionBlur.quality ?? 16 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.motionBlur.quality = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectPaniniProjection(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Panini Projection", trailing: {
+            ppToggle(entity: entity, get: { vol?.paniniProjection.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.paniniProjection.enabled = v } })
+        }) {
+            if vol?.paniniProjection.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Distance", entity: entity, range: 0...1,
+                        get: { vol?.paniniProjection.distance ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.paniniProjection.distance = v } })
+                    ppSlider(label: "Crop to Fit", entity: entity, range: 0...1,
+                        get: { vol?.paniniProjection.cropToFit ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.paniniProjection.cropToFit = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectShadowsMidtonesHighlights(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Shadows Midtones Highlights", trailing: {
+            ppToggle(entity: entity, get: { vol?.shadowsMidtonesHighlights.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.enabled = v } })
+        }) {
+            if vol?.shadowsMidtonesHighlights.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppColorRow(label: "Shadows", entity: entity,
+                        get: { SIMD3<Float>(vol?.shadowsMidtonesHighlights.shadows.x ?? 1, vol?.shadowsMidtonesHighlights.shadows.y ?? 1, vol?.shadowsMidtonesHighlights.shadows.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.shadows = SIMD4<Float>(v.x, v.y, v.z, $0.shadowsMidtonesHighlights.shadows.w) } })
+                    ppColorRow(label: "Midtones", entity: entity,
+                        get: { SIMD3<Float>(vol?.shadowsMidtonesHighlights.midtones.x ?? 1, vol?.shadowsMidtonesHighlights.midtones.y ?? 1, vol?.shadowsMidtonesHighlights.midtones.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.midtones = SIMD4<Float>(v.x, v.y, v.z, $0.shadowsMidtonesHighlights.midtones.w) } })
+                    ppColorRow(label: "Highlights", entity: entity,
+                        get: { SIMD3<Float>(vol?.shadowsMidtonesHighlights.highlights.x ?? 1, vol?.shadowsMidtonesHighlights.highlights.y ?? 1, vol?.shadowsMidtonesHighlights.highlights.z ?? 1) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.highlights = SIMD4<Float>(v.x, v.y, v.z, $0.shadowsMidtonesHighlights.highlights.w) } })
+                    ppSlider(label: "Shadow Start", entity: entity, range: 0...1,
+                        get: { vol?.shadowsMidtonesHighlights.shadowsStart ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.shadowsStart = v } })
+                    ppSlider(label: "Shadow End", entity: entity, range: 0...1,
+                        get: { vol?.shadowsMidtonesHighlights.shadowsEnd ?? 0.3 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.shadowsEnd = v } })
+                    ppSlider(label: "HL Start", entity: entity, range: 0...1,
+                        get: { vol?.shadowsMidtonesHighlights.highlightsStart ?? 0.55 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.highlightsStart = v } })
+                    ppSlider(label: "HL End", entity: entity, range: 0...1,
+                        get: { vol?.shadowsMidtonesHighlights.highlightsEnd ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.shadowsMidtonesHighlights.highlightsEnd = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectSplitToning(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Split Toning", trailing: {
+            ppToggle(entity: entity, get: { vol?.splitToning.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.splitToning.enabled = v } })
+        }) {
+            if vol?.splitToning.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppColorRow(label: "Shadows", entity: entity,
+                        get: { vol?.splitToning.shadowsTint ?? SIMD3<Float>(0.5, 0.5, 0.5) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.splitToning.shadowsTint = v } })
+                    ppColorRow(label: "Highlights", entity: entity,
+                        get: { vol?.splitToning.highlightsTint ?? SIMD3<Float>(0.5, 0.5, 0.5) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.splitToning.highlightsTint = v } })
+                    ppSlider(label: "Balance", entity: entity, range: -100...100,
+                        get: { vol?.splitToning.balance ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.splitToning.balance = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectTonemapping(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Tonemapping", trailing: {
+            ppToggle(entity: entity, get: { vol?.tonemapping.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.tonemapping.enabled = v } })
+        }) {
+            if vol?.tonemapping.enabled == true {
+                Picker("Mode", selection: Binding(
+                    get: { vol?.tonemapping.mode ?? .aces },
+                    set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.tonemapping.mode = v } }
+                )) {
+                    ForEach(TonemappingMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectVignette(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Vignette", trailing: {
+            ppToggle(entity: entity, get: { vol?.vignette.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.vignette.enabled = v } })
+        }) {
+            if vol?.vignette.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppColorRow(label: "Color", entity: entity,
+                        get: { vol?.vignette.color ?? SIMD3<Float>(0, 0, 0) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.vignette.color = v } })
+                    ppSlider(label: "Intensity", entity: entity, range: 0...1,
+                        get: { vol?.vignette.intensity ?? 0.3 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.vignette.intensity = v } })
+                    ppSlider(label: "Smoothness", entity: entity, range: 0.01...1,
+                        get: { vol?.vignette.smoothness ?? 0.3 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.vignette.smoothness = v } })
+                    Toggle("Rounded", isOn: Binding(
+                        get: { vol?.vignette.rounded ?? false },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.vignette.rounded = v } }
+                    ))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectWhiteBalance(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "White Balance", trailing: {
+            ppToggle(entity: entity, get: { vol?.whiteBalance.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.whiteBalance.enabled = v } })
+        }) {
+            if vol?.whiteBalance.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Temperature", entity: entity, range: -100...100,
+                        get: { vol?.whiteBalance.temperature ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.whiteBalance.temperature = v } })
+                    ppSlider(label: "Tint", entity: entity, range: -100...100,
+                        get: { vol?.whiteBalance.tint ?? 0 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.whiteBalance.tint = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectAmbientOcclusion(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Ambient Occlusion", trailing: {
+            ppToggle(entity: entity, get: { vol?.ambientOcclusion.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.ambientOcclusion.enabled = v } })
+        }) {
+            if vol?.ambientOcclusion.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    ppSlider(label: "Intensity", entity: entity, range: 0...4,
+                        get: { vol?.ambientOcclusion.intensity ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.ambientOcclusion.intensity = v } })
+                    ppSlider(label: "Radius", entity: entity, range: 0.01...5,
+                        get: { vol?.ambientOcclusion.radius ?? 0.5 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.ambientOcclusion.radius = v } })
+                    ppIntRow(label: "Samples", entity: entity,
+                        get: { vol?.ambientOcclusion.sampleCount ?? 16 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.ambientOcclusion.sampleCount = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectAntiAliasing(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Anti-Aliasing", trailing: {
+            ppToggle(entity: entity, get: { vol?.antiAliasing.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.antiAliasing.enabled = v } })
+        }) {
+            if vol?.antiAliasing.enabled == true {
+                Picker("Mode", selection: Binding(
+                    get: { vol?.antiAliasing.mode ?? .fxaa },
+                    set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.antiAliasing.mode = v } }
+                )) {
+                    ForEach(AntiAliasingMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectFullscreenBlur(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Fullscreen Blur", trailing: {
+            ppToggle(entity: entity, get: { vol?.fullscreenBlur.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenBlur.enabled = v } })
+        }) {
+            if vol?.fullscreenBlur.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Mode", selection: Binding(
+                        get: { vol?.fullscreenBlur.mode ?? .highQuality },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenBlur.mode = v } }
+                    )) {
+                        ForEach(FullscreenBlurMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+
+                    ppSlider(label: "Intensity", entity: entity, range: 0...1,
+                        get: { vol?.fullscreenBlur.intensity ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenBlur.intensity = v } })
+                    ppSlider(label: "Radius", entity: entity, range: 0...20,
+                        get: { vol?.fullscreenBlur.radius ?? 5 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenBlur.radius = v } })
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ppEffectFullscreenOutline(_ entity: Entity, vol: PostProcessVolumeComponent?) -> some View {
+        MCSection(title: "Fullscreen Outline", trailing: {
+            ppToggle(entity: entity, get: { vol?.fullscreenOutline.enabled ?? false },
+                set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenOutline.enabled = v } })
+        }) {
+            if vol?.fullscreenOutline.enabled == true {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Mode", selection: Binding(
+                        get: { vol?.fullscreenOutline.mode ?? .depthBased },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenOutline.mode = v } }
+                    )) {
+                        ForEach(FullscreenOutlineMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+
+                    ppSlider(label: "Thickness", entity: entity, range: 0.1...5,
+                        get: { vol?.fullscreenOutline.thickness ?? 1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenOutline.thickness = v } })
+                    ppColorRow(label: "Color", entity: entity,
+                        get: { vol?.fullscreenOutline.color ?? SIMD3<Float>(0, 0, 0) },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenOutline.color = v } })
+                    ppSlider(label: "Threshold", entity: entity, range: 0...1,
+                        get: { vol?.fullscreenOutline.threshold ?? 0.1 },
+                        set: { v in state.updateComponent(PostProcessVolumeComponent.self, on: entity) { $0.fullscreenOutline.threshold = v } })
+                }
+            }
+        }
+    }
+
+    // MARK: - PP Helper Views
+
+    @ViewBuilder
+    private func ppToggle(entity: Entity, get: @escaping () -> Bool, set: @escaping (Bool) -> Void) -> some View {
+        Toggle("", isOn: Binding(get: get, set: set))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+    }
+
+    @ViewBuilder
+    private func ppSlider(label: String, entity: Entity, range: ClosedRange<Float>,
+                          get: @escaping () -> Float, set: @escaping (Float) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            Slider(value: Binding(get: get, set: set), in: range)
+            Text(String(format: "%.2f", get()))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func ppColorRow(label: String, entity: Entity,
+                            get: @escaping () -> SIMD3<Float>, set: @escaping (SIMD3<Float>) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            ColorPicker("", selection: Binding(
+                get: {
+                    let c = get()
+                    return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                },
+                set: { newColor in
+                    if let components = newColor.cgColor?.components, components.count >= 3 {
+                        set(SIMD3<Float>(Float(components[0]), Float(components[1]), Float(components[2])))
+                    }
+                }
+            ), supportsOpacity: false)
+            .labelsHidden()
+        }
+    }
+
+    @ViewBuilder
+    private func ppIntRow(label: String, entity: Entity,
+                          get: @escaping () -> Int, set: @escaping (Int) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            TextField("", value: Binding(get: get, set: set), format: .number)
+                .textFieldStyle(.plain)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+                .frame(width: 60)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(MCTheme.inputBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(MCTheme.inputBorder, lineWidth: 1))
+        }
+    }
+
+    // MARK: - Gameplay Script Section
+
+    @ViewBuilder
+    private func gameplayScriptSection(_ entity: Entity) -> some View {
+        MCSection(title: "Gameplay Script") {
+            Button {
+                state.engine.world.removeComponent(GameplayScriptRef.self, from: entity)
+                state.worldRevision += 1
+                state.markDirty()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9))
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove Gameplay Script")
+        } content: {
+            let scriptNames = discoverScriptNames()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Script")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    if scriptNames.isEmpty {
+                        Text("No scripts found")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Picker("", selection: Binding(
+                            get: {
+                                state.engine.world.getComponent(GameplayScriptRef.self, from: entity)?.scriptName ?? ""
+                            },
+                            set: { newValue in
+                                state.updateComponent(GameplayScriptRef.self, on: entity) { ref in
+                                    ref.scriptName = newValue
+                                    ref.properties = discoverDefaultProperties(for: newValue)
+                                }
+                            }
+                        )) {
+                            Text("-- None --").tag("")
+                            ForEach(scriptNames, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                }
+
+                let discoveredProps = discoverProperties(
+                    for: state.engine.world.getComponent(GameplayScriptRef.self, from: entity)?.scriptName ?? ""
+                )
+
+                if !discoveredProps.isEmpty {
+                    ForEach(discoveredProps, id: \.name) { prop in
+                        HStack(spacing: 6) {
+                            Text(prop.name)
+                                .font(MCTheme.fontCaption)
+                                .foregroundStyle(MCTheme.textSecondary)
+                                .frame(width: 80, alignment: .leading)
+                            TextField(prop.defaultValue, text: Binding(
+                                get: {
+                                    state.engine.world.getComponent(GameplayScriptRef.self, from: entity)?
+                                        .properties[prop.name] ?? prop.defaultValue
+                                },
+                                set: { newValue in
+                                    state.updateComponent(GameplayScriptRef.self, on: entity) { r in
+                                        r.properties[prop.name] = newValue
+                                    }
+                                }
+                            ))
+                            .textFieldStyle(.plain)
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textPrimary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(MCTheme.inputBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(MCTheme.inputBorder, lineWidth: 1))
+                            Text(prop.type)
+                                .font(.system(size: 9))
+                                .foregroundStyle(MCTheme.textTertiary)
+                                .frame(width: 50, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func gameplayDirectories() -> [URL] {
+        var dirs: [URL] = []
+        if let gameplayDir = state.projectManager.directoryURL(for: .gameplay) {
+            dirs.append(gameplayDir)
+            let genDir = gameplayDir.appendingPathComponent(".generated")
+            if FileManager.default.fileExists(atPath: genDir.path) {
+                dirs.append(genDir)
+            }
+        }
+        return dirs
+    }
+
+    private func discoverScriptNames() -> [String] {
+        let dirs = gameplayDirectories()
+        guard !dirs.isEmpty else { return [] }
+        return GameplayScriptScanner().scriptNames(in: dirs)
+    }
+
+    private func discoverProperties(for scriptName: String) -> [ScriptProperty] {
+        guard !scriptName.isEmpty else { return [] }
+        let dirs = gameplayDirectories()
+        guard !dirs.isEmpty else { return [] }
+        return GameplayScriptScanner().properties(forScript: scriptName, in: dirs)
+    }
+
+    private func discoverDefaultProperties(for scriptName: String) -> [String: String] {
+        let props = discoverProperties(for: scriptName)
+        var dict: [String: String] = [:]
+        for p in props {
+            dict[p.name] = p.defaultValue
+        }
+        return dict
+    }
+
     @ViewBuilder
     private func addComponentSection(_ entity: Entity) -> some View {
         let world = state.engine.world
@@ -1498,6 +2243,19 @@ struct InspectorView: View {
                         state.worldRevision += 1
                     }
                 }
+                if !world.hasComponent(PostProcessVolumeComponent.self, on: entity) {
+                    Button("Post Process Volume") {
+                        world.addComponent(PostProcessVolumeComponent(), to: entity)
+                        state.worldRevision += 1
+                    }
+                }
+                if !world.hasComponent(GameplayScriptRef.self, on: entity) {
+                    Button("Gameplay Script") {
+                        world.addComponent(GameplayScriptRef(), to: entity)
+                        state.worldRevision += 1
+                        state.markDirty()
+                    }
+                }
             }
             .foregroundStyle(MCTheme.textPrimary)
             Spacer()
@@ -1536,14 +2294,11 @@ struct InspectorView: View {
     private func liveFloatRow(label: String, entity: Entity,
                               get: @escaping () -> Float,
                               set: @escaping (Float) -> Void) -> some View {
-        HStack(spacing: 8) {
-            MCDraggableField(label: label, displayValue: get(),
-                getValue: get,
-                onChanged: { v in set(v) },
-                step: 0.1,
-                labelWidth: 70)
-                .frame(width: 130)
-        }
+        MCDraggableField(label: label, displayValue: get(),
+            getValue: get,
+            onChanged: { v in set(v) },
+            step: 0.1,
+            labelWidth: 70)
     }
 
     private func meshTypeDisplay(_ type: MeshType) -> String {
@@ -1879,7 +2634,7 @@ private struct ScaleRowView: View {
                 TextField("", text: $editText)
                     .textFieldStyle(.plain)
                     .mcInputStyle()
-                    .frame(width: 50)
+                    .frame(maxWidth: .infinity)
                     .focused($isFocused)
                     .onSubmit { commitEdit(axis) }
                     .onChange(of: isFocused) { _, focused in
@@ -1893,9 +2648,11 @@ private struct ScaleRowView: View {
                 Text(String(format: "%.2f", comp(shown, axis)))
                     .font(MCTheme.fontBody)
                     .foregroundStyle(MCTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .frame(width: 50, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(MCTheme.inputBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)

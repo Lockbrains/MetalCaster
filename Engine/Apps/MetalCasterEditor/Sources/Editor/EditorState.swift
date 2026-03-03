@@ -32,6 +32,7 @@ public final class EditorState {
     public let lightingSystem = LightingSystem()
     public let meshRenderSystem = MeshRenderSystem()
     public let skyboxSystem = SkyboxSystem()
+    public let postProcessVolumeSystem = PostProcessVolumeSystem()
 
     // MARK: - Selection
 
@@ -132,6 +133,7 @@ public final class EditorState {
     public var showSavePanel = false
     public var showImportPanel = false
     public var showAIChat = false
+    public var showAISettings = false
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
@@ -184,6 +186,14 @@ public final class EditorState {
     public let orchestrator: AgentOrchestrator
     private(set) var engineAPI: EditorEngineAPI!
 
+    // MARK: - Prompt Script System
+
+    public let promptFileWatcher = PromptFileWatcher()
+    public var promptCompileStatuses: [String: PromptCompileStatus] = [:]
+    public var showXcodeIntegrationPrompt: Bool = false
+    public var xcodeIntegrationError: String? = nil
+    public var editingPromptURL: URL? = nil
+
     // MARK: - Scene Editor Tool Mode (QWER)
 
     public enum SceneToolMode: String, CaseIterable {
@@ -228,7 +238,7 @@ public final class EditorState {
     // MARK: - Scene Editor Display
 
     public var showGrid: Bool = true
-    public var invertPan: Bool = false
+    public var invertPan: Bool = true
 
     // MARK: - Scene Editor Camera
 
@@ -292,6 +302,28 @@ public final class EditorState {
     public var camera2OrbitDistance: Float = 12.0
     public var camera2OrbitTarget: SIMD3<Float> = .zero
 
+    // MARK: - Output Camera Selection
+
+    public var selectedOutputCamera: Entity?
+
+    /// All entities in the scene that carry a CameraComponent.
+    public var cameraEntities: [(entity: Entity, name: String)] {
+        engine.world.query(TransformComponent.self, CameraComponent.self).map { (entity, _, _) in
+            (entity: entity, name: sceneGraph.name(of: entity))
+        }
+    }
+
+    /// The camera entity used for the Output viewport.
+    /// Falls back to the first active camera, then the first camera overall.
+    public var resolvedOutputCamera: Entity? {
+        if let selected = selectedOutputCamera,
+           engine.world.getComponent(CameraComponent.self, from: selected) != nil {
+            return selected
+        }
+        let cameras = engine.world.query(TransformComponent.self, CameraComponent.self)
+        return cameras.first(where: { $0.2.isActive })?.0 ?? cameras.first?.0
+    }
+
     // MARK: - Init
 
     /// Opens an existing project or initializes at the given URL.
@@ -304,6 +336,7 @@ public final class EditorState {
         engine.addSystem(cameraSystem)
         engine.addSystem(lightingSystem)
         engine.addSystem(skyboxSystem)
+        engine.addSystem(postProcessVolumeSystem)
         engine.addSystem(meshRenderSystem)
 
         setupDefaultScene()
@@ -313,6 +346,8 @@ public final class EditorState {
         tryLoadLastScene()
 
         setupAgentSystem()
+        setupPromptFileWatcher()
+        checkXcodeIntegration()
     }
 
     private func setupAgentSystem() {
@@ -452,6 +487,19 @@ public final class EditorState {
         return entity
     }
 
+    @discardableResult
+    public func addPostProcessVolume() -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Post Process Volume")
+        engine.world.addComponent(PostProcessVolumeComponent(), to: entity)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
     /// Creates a new entity with default-initialized components matching the given archetype signature.
     @discardableResult
     public func addEntityFromArchetype(componentNames: Set<String>) -> Entity {
@@ -476,6 +524,10 @@ public final class EditorState {
                 world.addComponent(CameraComponent(isActive: false), to: entity)
             case LightComponent.componentName:
                 world.addComponent(LightComponent(type: .directional), to: entity)
+            case PostProcessVolumeComponent.componentName:
+                world.addComponent(PostProcessVolumeComponent(), to: entity)
+            case GameplayScriptRef.componentName:
+                world.addComponent(GameplayScriptRef(), to: entity)
             case ManagerComponent.componentName:
                 break // managers should not be spawned this way
             default:
@@ -803,6 +855,140 @@ public final class EditorState {
         }
     }
 
+    // MARK: - Prompt Script Operations
+
+    private func checkXcodeIntegration() {
+        #if os(macOS)
+        if XcodePromptIntegration.shouldPrompt {
+            showXcodeIntegrationPrompt = true
+        }
+        #endif
+    }
+
+    public func installXcodeIntegration() {
+        #if os(macOS)
+        if let error = XcodePromptIntegration.install() {
+            xcodeIntegrationError = error
+        } else {
+            showXcodeIntegrationPrompt = false
+            xcodeIntegrationError = nil
+        }
+        #endif
+    }
+
+    private func setupPromptFileWatcher() {
+        guard let gameplayDir = projectManager.directoryURL(for: .gameplay) else { return }
+        promptFileWatcher.onPromptChanged = { [weak self] url in
+            guard let self else { return }
+            // Don't auto-compile if the user has the file open in the built-in editor;
+            // the editor provides an explicit "Generate" button instead.
+            guard self.editingPromptURL != url else { return }
+            Task { @MainActor in
+                await self.compilePromptScript(at: url)
+            }
+        }
+        promptFileWatcher.startWatching(directory: gameplayDir)
+    }
+
+    /// Creates a new `.prompt` file from the template and places it in the Gameplay directory.
+    public func createPromptScript(named name: String) {
+        guard let dir = projectManager.directoryURL(for: .gameplay) else {
+            print("[MetalCaster] Gameplay directory not available")
+            return
+        }
+
+        let sanitized = name.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: " ", with: "")
+            .filter { $0.isLetter || $0.isNumber }
+        guard !sanitized.isEmpty else {
+            print("[MetalCaster] Invalid prompt script name")
+            return
+        }
+
+        let filename = "\(sanitized).prompt"
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("[MetalCaster] Prompt script already exists: \(filename)")
+            return
+        }
+
+        let data = PromptScriptTemplate.generate(name: name.trimmingCharacters(in: .whitespaces))
+        do {
+            try data.write(to: fileURL, options: .atomic)
+            _ = projectManager.ensureMeta(for: "Gameplay/\(filename)", type: .gameplay)
+            selectedAssetCategory = .gameplay
+            assetBrowserSubfolder = nil
+            refreshAssetBrowser()
+            editingPromptURL = fileURL
+        } catch {
+            print("[MetalCaster] Failed to create prompt script: \(error)")
+        }
+    }
+
+    /// Compiles a single `.prompt` file by loading its JSON and calling the LLM.
+    public func compilePromptScript(at url: URL) async {
+        let key = url.lastPathComponent
+        promptCompileStatuses[key] = .compiling
+
+        do {
+            let data = try PromptScriptTemplate.load(from: url)
+            let errors = PromptScriptValidator.validate(data)
+            guard errors.isEmpty else {
+                promptCompileStatuses[key] = .failed(errors.first ?? "Validation failed")
+                return
+            }
+
+            guard let genURL = projectManager.generatedScriptURL(for: url) else {
+                promptCompileStatuses[key] = .failed("Could not determine output path")
+                return
+            }
+
+            let swiftCode = try await PromptScriptCompiler.shared.compile(
+                data: data,
+                settings: aiSettings
+            )
+
+            try swiftCode.write(to: genURL, atomically: true, encoding: .utf8)
+            promptCompileStatuses[key] = .success
+            refreshAssetBrowser()
+            print("[MetalCaster] Compiled prompt script: \(key) -> \(genURL.lastPathComponent)")
+        } catch {
+            promptCompileStatuses[key] = .failed(error.localizedDescription)
+            print("[MetalCaster] Failed to compile prompt script \(key): \(error)")
+        }
+    }
+
+    /// Compiles all `.prompt` files in the Gameplay directory.
+    public func compileAllPromptScripts() async {
+        guard let dir = projectManager.directoryURL(for: .gameplay) else { return }
+        let fm = FileManager.default
+
+        guard let contents = try? fm.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for url in contents where url.pathExtension.lowercased() == "prompt" {
+            await compilePromptScript(at: url)
+        }
+    }
+
+    /// Returns the generated Swift URL for a given `.prompt` entry, if it exists.
+    public func generatedScriptURL(for promptEntry: AssetEntry) -> URL? {
+        guard promptEntry.fileExtension == "prompt",
+              let root = projectManager.projectRoot else { return nil }
+        let promptURL = root.appendingPathComponent(promptEntry.relativePath)
+        return projectManager.generatedScriptURL(for: promptURL)
+    }
+
+    /// Whether a generated Swift file exists for the given prompt entry.
+    public func hasGeneratedScript(for promptEntry: AssetEntry) -> Bool {
+        guard let url = generatedScriptURL(for: promptEntry) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     /// Imports a file into the project via AssetDatabase.
     public func importAssetFile(from url: URL) {
         do {
@@ -1118,9 +1304,72 @@ public final class EditorState {
     }
 
     public func playInEditor() {
-        Task {
-            await buildSystem.runInEditor(scene: sceneGraph, world: engine.world)
+        if buildSystem.isPlaying {
+            stopPlaying()
+            return
         }
+
+        saveScene()
+
+        var gameplayDirs: [URL] = []
+        if let gameplayDir = projectManager.directoryURL(for: .gameplay) {
+            gameplayDirs.append(gameplayDir)
+            let genDir = gameplayDir.appendingPathComponent(".generated")
+            if FileManager.default.fileExists(atPath: genDir.path) {
+                gameplayDirs.append(genDir)
+            }
+        }
+
+        guard let enginePath = Self.resolveEnginePackagePath() else {
+            buildSystem.buildLog.append("[Error] Cannot locate Engine package — cannot play")
+            buildSystem.status = .failed(error: "Cannot locate Engine Package.swift. Make sure you are running from the source tree.")
+            return
+        }
+
+        Task {
+            await buildSystem.runInEditor(
+                scene: sceneGraph,
+                world: engine.world,
+                gameplayDirectories: gameplayDirs,
+                enginePackagePath: enginePath
+            )
+        }
+    }
+
+    public func stopPlaying() {
+        buildSystem.stopPreview()
+    }
+
+    /// Locates the Engine SPM package directory.
+    /// Primary: walk up from this source file's compile-time path.
+    /// Fallback: walk up from the running executable.
+    private static func resolveEnginePackagePath() -> URL? {
+        func walkUp(from start: URL) -> URL? {
+            var dir: URL? = start
+            for _ in 0..<12 {
+                guard let current = dir else { return nil }
+                let candidate = current.appendingPathComponent("Package.swift")
+                if FileManager.default.fileExists(atPath: candidate.path),
+                   let contents = try? String(contentsOf: candidate, encoding: .utf8),
+                   contents.contains("MetalCasterCore") {
+                    return current
+                }
+                dir = current.deletingLastPathComponent()
+            }
+            return nil
+        }
+
+        let sourceFileURL = URL(fileURLWithPath: #filePath)
+        if let found = walkUp(from: sourceFileURL.deletingLastPathComponent()) {
+            return found
+        }
+
+        #if os(macOS)
+        if let execDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            return walkUp(from: execDir)
+        }
+        #endif
+        return nil
     }
 
     // MARK: - Tick

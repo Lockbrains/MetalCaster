@@ -38,7 +38,7 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
         case .shaders:   return ["metal"]
         case .audio:     return ["wav", "mp3", "aac", "m4a", "ogg"]
         case .prefabs:   return ["mcprefab"]
-        case .gameplay:  return ["swift"]
+        case .gameplay:  return ["swift", "prompt"]
         }
     }
 

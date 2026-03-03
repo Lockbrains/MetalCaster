@@ -311,6 +311,299 @@ public struct MotionBlurUniforms: Sendable {
     }
 }
 
+// MARK: - Bloom Uniforms (CPU ↔ GPU)
+
+public struct BloomUniforms: Sendable {
+    public var threshold: Float
+    public var intensity: Float
+    public var scatter: Float
+    public var tintR: Float
+    public var tintG: Float
+    public var tintB: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+
+    public init(
+        threshold: Float = 0.9, intensity: Float = 1.0, scatter: Float = 0.7,
+        tintR: Float = 1, tintG: Float = 1, tintB: Float = 1,
+        screenWidth: Float = 1920, screenHeight: Float = 1080
+    ) {
+        self.threshold = threshold; self.intensity = intensity; self.scatter = scatter
+        self.tintR = tintR; self.tintG = tintG; self.tintB = tintB
+        self.screenWidth = screenWidth; self.screenHeight = screenHeight
+    }
+}
+
+// MARK: - Color Grading Uniforms (CPU ↔ GPU)
+
+/// Combined uniform for all color grading effects in a single pass:
+/// Color Adjustments, White Balance, Channel Mixer, Lift/Gamma/Gain,
+/// Split Toning, Shadows/Midtones/Highlights, Tonemapping.
+public struct ColorGradingUniforms: Sendable {
+    // Color Adjustments
+    public var postExposure: Float
+    public var contrast: Float
+    public var colorFilterR: Float
+    public var colorFilterG: Float
+    public var colorFilterB: Float
+    public var hueShift: Float
+    public var saturation: Float
+    public var enableColorAdjustments: Float
+
+    // White Balance
+    public var temperature: Float
+    public var wbTint: Float
+    public var enableWhiteBalance: Float
+    public var _pad0: Float = 0
+
+    // Channel Mixer (row-major 3x3)
+    public var mixerRedR: Float
+    public var mixerRedG: Float
+    public var mixerRedB: Float
+    public var enableChannelMixer: Float
+    public var mixerGreenR: Float
+    public var mixerGreenG: Float
+    public var mixerGreenB: Float
+    public var _pad1: Float = 0
+    public var mixerBlueR: Float
+    public var mixerBlueG: Float
+    public var mixerBlueB: Float
+    public var _pad2: Float = 0
+
+    // Lift Gamma Gain
+    public var lift: SIMD4<Float>
+    public var gamma: SIMD4<Float>
+    public var gain: SIMD4<Float>
+    public var enableLGG: Float
+    public var _pad3: Float = 0
+    public var _pad4: Float = 0
+    public var _pad5: Float = 0
+
+    // Split Toning
+    public var splitShadowR: Float
+    public var splitShadowG: Float
+    public var splitShadowB: Float
+    public var splitBalance: Float
+    public var splitHighR: Float
+    public var splitHighG: Float
+    public var splitHighB: Float
+    public var enableSplitToning: Float
+
+    // Shadows Midtones Highlights
+    public var smhShadows: SIMD4<Float>
+    public var smhMidtones: SIMD4<Float>
+    public var smhHighlights: SIMD4<Float>
+    public var smhShadowsStart: Float
+    public var smhShadowsEnd: Float
+    public var smhHighlightsStart: Float
+    public var smhHighlightsEnd: Float
+    public var enableSMH: Float
+    public var _pad6: Float = 0
+    public var _pad7: Float = 0
+    public var _pad8: Float = 0
+
+    // Tonemapping
+    public var tonemappingMode: Float
+    public var _pad9: Float = 0
+    public var _padA: Float = 0
+    public var _padB: Float = 0
+
+    public init() {
+        postExposure = 0; contrast = 0
+        colorFilterR = 1; colorFilterG = 1; colorFilterB = 1
+        hueShift = 0; saturation = 0; enableColorAdjustments = 0
+        temperature = 0; wbTint = 0; enableWhiteBalance = 0
+        mixerRedR = 1; mixerRedG = 0; mixerRedB = 0; enableChannelMixer = 0
+        mixerGreenR = 0; mixerGreenG = 1; mixerGreenB = 0
+        mixerBlueR = 0; mixerBlueG = 0; mixerBlueB = 1
+        lift = SIMD4<Float>(1, 1, 1, 0)
+        gamma = SIMD4<Float>(1, 1, 1, 0)
+        gain = SIMD4<Float>(1, 1, 1, 0)
+        enableLGG = 0
+        splitShadowR = 0.5; splitShadowG = 0.5; splitShadowB = 0.5; splitBalance = 0
+        splitHighR = 0.5; splitHighG = 0.5; splitHighB = 0.5; enableSplitToning = 0
+        smhShadows = SIMD4<Float>(1, 1, 1, 0)
+        smhMidtones = SIMD4<Float>(1, 1, 1, 0)
+        smhHighlights = SIMD4<Float>(1, 1, 1, 0)
+        smhShadowsStart = 0; smhShadowsEnd = 0.3
+        smhHighlightsStart = 0.55; smhHighlightsEnd = 1
+        enableSMH = 0
+        tonemappingMode = 0
+    }
+}
+
+// MARK: - Vignette Uniforms (CPU ↔ GPU)
+
+public struct VignetteUniforms: Sendable {
+    public var colorR: Float
+    public var colorG: Float
+    public var colorB: Float
+    public var intensity: Float
+    public var centerX: Float
+    public var centerY: Float
+    public var smoothness: Float
+    public var rounded: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init() {
+        colorR = 0; colorG = 0; colorB = 0; intensity = 0.3
+        centerX = 0.5; centerY = 0.5; smoothness = 0.3; rounded = 0
+        screenWidth = 1920; screenHeight = 1080
+    }
+}
+
+// MARK: - Chromatic Aberration Uniforms (CPU ↔ GPU)
+
+public struct ChromaticAberrationUniforms: Sendable {
+    public var intensity: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+
+    public init() { intensity = 0.1; screenWidth = 1920; screenHeight = 1080 }
+
+    public init(intensity: Float, screenWidth: Float, screenHeight: Float) {
+        self.intensity = intensity; self.screenWidth = screenWidth; self.screenHeight = screenHeight
+    }
+}
+
+// MARK: - Film Grain Uniforms (CPU ↔ GPU)
+
+public struct FilmGrainUniforms: Sendable {
+    public var intensity: Float
+    public var response: Float
+    public var grainType: Float
+    public var time: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init() {
+        intensity = 0.5; response = 0.8; grainType = 1; time = 0
+        screenWidth = 1920; screenHeight = 1080
+    }
+}
+
+// MARK: - Lens Distortion Uniforms (CPU ↔ GPU)
+
+public struct LensDistortionUniforms: Sendable {
+    public var intensity: Float
+    public var xMultiplier: Float
+    public var yMultiplier: Float
+    public var scale: Float
+    public var centerX: Float
+    public var centerY: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+
+    public init() {
+        intensity = 0; xMultiplier = 1; yMultiplier = 1; scale = 1
+        centerX = 0.5; centerY = 0.5; screenWidth = 1920; screenHeight = 1080
+    }
+
+    public init(intensity: Float, xMultiplier: Float, yMultiplier: Float, scale: Float,
+                centerX: Float, centerY: Float, screenWidth: Float, screenHeight: Float) {
+        self.intensity = intensity; self.xMultiplier = xMultiplier
+        self.yMultiplier = yMultiplier; self.scale = scale
+        self.centerX = centerX; self.centerY = centerY
+        self.screenWidth = screenWidth; self.screenHeight = screenHeight
+    }
+}
+
+// MARK: - Panini Projection Uniforms (CPU ↔ GPU)
+
+public struct PaniniUniforms: Sendable {
+    public var distance: Float
+    public var cropToFit: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+
+    public init() { distance = 0; cropToFit = 1; screenWidth = 1920; screenHeight = 1080 }
+
+    public init(distance: Float, cropToFit: Float, screenWidth: Float, screenHeight: Float) {
+        self.distance = distance; self.cropToFit = cropToFit
+        self.screenWidth = screenWidth; self.screenHeight = screenHeight
+    }
+}
+
+// MARK: - SSAO Uniforms (CPU ↔ GPU)
+
+public struct SSAOUniforms: Sendable {
+    public var intensity: Float
+    public var radius: Float
+    public var sampleCount: Float
+    public var _pad0: Float = 0
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var nearZ: Float
+    public var farZ: Float
+
+    public init() {
+        intensity = 1; radius = 0.5; sampleCount = 16
+        screenWidth = 1920; screenHeight = 1080; nearZ = 0.1; farZ = 1000
+    }
+}
+
+// MARK: - FXAA Uniforms (CPU ↔ GPU)
+
+public struct FXAAUniforms: Sendable {
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init() { screenWidth = 1920; screenHeight = 1080 }
+
+    public init(screenWidth: Float, screenHeight: Float) {
+        self.screenWidth = screenWidth; self.screenHeight = screenHeight
+    }
+}
+
+// MARK: - Fullscreen Blur Uniforms (CPU ↔ GPU)
+
+public struct FullscreenBlurUniforms: Sendable {
+    public var intensity: Float
+    public var radius: Float
+    public var blurMode: Float
+    public var iteration: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init() {
+        intensity = 1; radius = 5; blurMode = 0; iteration = 0
+        screenWidth = 1920; screenHeight = 1080
+    }
+}
+
+// MARK: - Fullscreen Outline Uniforms (CPU ↔ GPU)
+
+public struct FullscreenOutlineUniforms: Sendable {
+    public var outlineMode: Float
+    public var thickness: Float
+    public var threshold: Float
+    public var colorR: Float
+    public var colorG: Float
+    public var colorB: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var nearZ: Float
+    public var farZ: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+
+    public init() {
+        outlineMode = 2; thickness = 1; threshold = 0.1
+        colorR = 0; colorG = 0; colorB = 0
+        screenWidth = 1920; screenHeight = 1080; nearZ = 0.1; farZ = 1000
+    }
+}
+
 // MARK: - Canvas Document
 
 /// The top-level serializable workspace state for Shader Canvas.

@@ -15,6 +15,11 @@ public final class USDExporter {
     // MARK: - USDA Export
     
     public func exportToUSDA(sceneGraph: SceneGraph, world: World) -> String {
+        let primNames = buildPrimNameMap(sceneGraph: sceneGraph, world: world)
+        return exportToUSDA(sceneGraph: sceneGraph, world: world, primNames: primNames)
+    }
+
+    private func exportToUSDA(sceneGraph: SceneGraph, world: World, primNames: [UInt64: String]) -> String {
         var usda = "#usda 1.0\n"
         usda += "(\n"
         usda += "    defaultPrim = \"Root\"\n"
@@ -25,7 +30,7 @@ public final class USDExporter {
         usda += "def Xform \"Root\"\n{\n"
         
         for root in sceneGraph.rootEntities() {
-            usda += exportEntity(root, world: world, sceneGraph: sceneGraph, indent: 1)
+            usda += exportEntity(root, world: world, sceneGraph: sceneGraph, primNames: primNames, indent: 1)
         }
         
         usda += "}\n"
@@ -41,10 +46,17 @@ public final class USDExporter {
     // MARK: - Sidecar Metadata Export
     
     public func exportSidecar(sceneGraph: SceneGraph, world: World) throws -> Data {
+        let primNames = buildPrimNameMap(sceneGraph: sceneGraph, world: world)
+        return try exportSidecar(sceneGraph: sceneGraph, world: world, primNames: primNames)
+    }
+
+    private func exportSidecar(sceneGraph: SceneGraph, world: World, primNames: [UInt64: String]) throws -> Data {
         var sidecar = SceneSidecar()
         
         for (entity, _) in world.query(TransformComponent.self) {
-            var entry = SceneSidecar.EntityMeta(entityName: sceneGraph.name(of: entity))
+            let displayName = sceneGraph.name(of: entity)
+            let primName = primNames[entity.id] ?? sanitizeUSDName(displayName)
+            var entry = SceneSidecar.EntityMeta(entityName: displayName, entityID: entity.id, primName: primName)
             
             if let mat = world.getComponent(MaterialComponent.self, from: entity) {
                 entry.material = mat.material
@@ -58,6 +70,12 @@ public final class USDExporter {
             if let sky = world.getComponent(SkyboxComponent.self, from: entity) {
                 entry.skybox = sky
             }
+            if let ppv = world.getComponent(PostProcessVolumeComponent.self, from: entity) {
+                entry.postProcessVolume = ppv
+            }
+            if let scriptRef = world.getComponent(GameplayScriptRef.self, from: entity) {
+                entry.gameplayScriptRef = scriptRef
+            }
             
             sidecar.entities.append(entry)
         }
@@ -69,22 +87,51 @@ public final class USDExporter {
     
     /// Writes both `.usda` and `.mcmeta` sidecar for a scene.
     public func writeScene(sceneGraph: SceneGraph, world: World, to usdaURL: URL) throws {
-        try writeUSDA(sceneGraph: sceneGraph, world: world, to: usdaURL)
-        
+        let primNames = buildPrimNameMap(sceneGraph: sceneGraph, world: world)
+
+        let usda = exportToUSDA(sceneGraph: sceneGraph, world: world, primNames: primNames)
+        try usda.write(to: usdaURL, atomically: true, encoding: .utf8)
+
         let sidecarURL = usdaURL.deletingPathExtension().appendingPathExtension("mcmeta")
-        let sidecarData = try exportSidecar(sceneGraph: sceneGraph, world: world)
+        let sidecarData = try exportSidecar(sceneGraph: sceneGraph, world: world, primNames: primNames)
         try sidecarData.write(to: sidecarURL, options: .atomic)
     }
     
+    // MARK: - Prim Name Map
+
+    /// Builds a map from entity ID to unique, sanitized USD prim name.
+    /// Handles duplicate names by appending "_1", "_2", etc.
+    private func buildPrimNameMap(sceneGraph: SceneGraph, world: World) -> [UInt64: String] {
+        var map: [UInt64: String] = [:]
+        var usedNames: [String: Int] = [:]
+
+        func assignNames(for entities: [Entity]) {
+            for entity in entities {
+                let base = sanitizeUSDName(sceneGraph.name(of: entity))
+                let count = usedNames[base, default: 0]
+                let unique = count == 0 ? base : "\(base)_\(count)"
+                usedNames[base] = count + 1
+                map[entity.id] = unique
+                assignNames(for: sceneGraph.children(of: entity))
+            }
+        }
+
+        assignNames(for: sceneGraph.rootEntities())
+        return map
+    }
+
     // MARK: - Entity Export
     
-    private func exportEntity(_ entity: Entity, world: World, sceneGraph: SceneGraph, indent: Int) -> String {
+    private func exportEntity(_ entity: Entity, world: World, sceneGraph: SceneGraph, primNames: [UInt64: String], indent: Int) -> String {
         let pad = String(repeating: "    ", count: indent)
-        let name = sanitizeUSDName(sceneGraph.name(of: entity))
+        let name = primNames[entity.id] ?? sanitizeUSDName(sceneGraph.name(of: entity))
         
         let primType = usdPrimType(for: entity, world: world)
         
         var usda = "\(pad)def \(primType) \"\(name)\"\n\(pad){\n"
+        
+        let innerPad = String(repeating: "    ", count: indent + 1)
+        usda += "\(innerPad)custom uint64 mc:entityID = \(entity.id)\n"
         
         if let tc = world.getComponent(TransformComponent.self, from: entity) {
             usda += exportTransform(tc, indent: indent + 1)
@@ -107,7 +154,7 @@ public final class USDExporter {
         }
         
         for child in sceneGraph.children(of: entity) {
-            usda += exportEntity(child, world: world, sceneGraph: sceneGraph, indent: indent + 1)
+            usda += exportEntity(child, world: world, sceneGraph: sceneGraph, primNames: primNames, indent: indent + 1)
         }
         
         usda += "\(pad)}\n"
@@ -190,7 +237,6 @@ public final class USDExporter {
         let pad = String(repeating: "    ", count: indent)
         var usda = ""
 
-        // USD-standard camera attributes
         usda += "\(pad)float focalLength = \(cc.focalLength)\n"
         usda += "\(pad)float horizontalAperture = \(cc.sensorSizeMM.x)\n"
         usda += "\(pad)float verticalAperture = \(cc.sensorSizeMM.y)\n"
@@ -198,7 +244,6 @@ public final class USDExporter {
         usda += "\(pad)float focusDistance = \(cc.focusDistance)\n"
         usda += "\(pad)float2 clippingRange = (\(cc.nearZ), \(cc.farZ))\n"
 
-        // Engine-specific metadata
         let fovDeg = cc.fov * 180.0 / .pi
         usda += "\(pad)custom string mc:projection = \"\(cc.projection.rawValue)\"\n"
         usda += "\(pad)custom float mc:fov = \(fovDeg)\n"
@@ -248,9 +293,16 @@ public struct SceneSidecar: Codable {
     
     public struct EntityMeta: Codable {
         public var entityName: String
+        /// Stable entity ID written to the USDA as mc:entityID.
+        /// Primary key for matching entities between USDA and sidecar on load.
+        public var entityID: UInt64?
+        /// Legacy prim-name key (kept for backward compat with older sidecars).
+        public var primName: String?
         public var material: MCMaterial?
         public var camera: CameraComponent?
         public var manager: ManagerComponent?
         public var skybox: SkyboxComponent?
+        public var postProcessVolume: PostProcessVolumeComponent?
+        public var gameplayScriptRef: GameplayScriptRef?
     }
 }

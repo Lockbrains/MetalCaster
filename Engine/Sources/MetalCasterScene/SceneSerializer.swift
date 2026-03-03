@@ -41,6 +41,12 @@ public final class SceneSerializer {
             if let skybox = world.getComponent(SkyboxComponent.self, from: entity) {
                 entityData.skybox = skybox
             }
+            if let ppVolume = world.getComponent(PostProcessVolumeComponent.self, from: entity) {
+                entityData.postProcessVolume = ppVolume
+            }
+            if let scriptRef = world.getComponent(GameplayScriptRef.self, from: entity) {
+                entityData.gameplayScriptRef = scriptRef
+            }
             
             sceneData.entities.append(entityData)
         }
@@ -98,6 +104,12 @@ public final class SceneSerializer {
             if let skybox = ed.skybox {
                 world.addComponent(skybox, to: entity)
             }
+            if let ppVolume = ed.postProcessVolume {
+                world.addComponent(ppVolume, to: entity)
+            }
+            if let scriptRef = ed.gameplayScriptRef {
+                world.addComponent(scriptRef, to: entity)
+            }
         }
     }
 }
@@ -119,4 +131,6 @@ struct EntityData: Codable {
     var light: LightComponent?
     var manager: ManagerComponent?
     var skybox: SkyboxComponent?
+    var postProcessVolume: PostProcessVolumeComponent?
+    var gameplayScriptRef: GameplayScriptRef?
 }

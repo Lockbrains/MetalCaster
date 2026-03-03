@@ -213,12 +213,18 @@ public struct PipelineCacheKey: Hashable, Sendable {
     public let blendMode: MCBlendMode
     public let depthWrite: Bool
     public let cullMode: MCCullMode
+    public let isHDR: Bool
 
-    public init(shaderSourceHash: Int, blendMode: MCBlendMode, depthWrite: Bool, cullMode: MCCullMode) {
+    public init(shaderSourceHash: Int, blendMode: MCBlendMode, depthWrite: Bool, cullMode: MCCullMode, isHDR: Bool = false) {
         self.shaderSourceHash = shaderSourceHash
         self.blendMode = blendMode
         self.depthWrite = depthWrite
         self.cullMode = cullMode
+        self.isHDR = isHDR
+    }
+
+    public func withHDR(_ hdr: Bool) -> PipelineCacheKey {
+        PipelineCacheKey(shaderSourceHash: shaderSourceHash, blendMode: blendMode, depthWrite: depthWrite, cullMode: cullMode, isHDR: hdr)
     }
 }
 

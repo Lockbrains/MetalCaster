@@ -565,6 +565,91 @@ public struct ShaderSnippets {
     }
     """
 
+    // MARK: - Object ID Pass (GPU Picking & Outline)
+
+    /// Renders each entity with a unique uint ID into an r32Uint texture.
+    /// Used for pixel-perfect picking and post-process outline detection.
+    public static let entityIDShader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct VertexIn {
+        float3 positionOS [[attribute(0)]];
+        float3 normalOS   [[attribute(1)]];
+        float2 uv         [[attribute(2)]];
+    };
+
+    struct VertexOut {
+        float4 position [[position]];
+    };
+
+    struct Uniforms {
+        float4x4 mvpMatrix;
+        float4x4 modelMatrix;
+        float4x4 normalMatrix;
+        float4   cameraPosition;
+        float    time;
+        float    _pad0;
+        float    _pad1;
+        float    _pad2;
+    };
+
+    vertex VertexOut vertex_main(VertexIn in [[stage_in]],
+                                 constant Uniforms &uniforms [[buffer(1)]]) {
+        VertexOut out;
+        out.position = uniforms.mvpMatrix * float4(in.positionOS, 1.0);
+        return out;
+    }
+
+    fragment uint4 fragment_main(VertexOut in [[stage_in]],
+                                 constant uint &entityID [[buffer(6)]]) {
+        return uint4(entityID, 0, 0, 0);
+    }
+    """
+
+    /// Post-process outline from Object ID texture.
+    /// Detects edges where the selected entity borders other entities or background.
+    public static let outlineCompositeShader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct VertexOut {
+        float4 position [[position]];
+    };
+
+    vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {
+        VertexOut out;
+        float2 positions[3] = {
+            float2(-1.0, -1.0),
+            float2( 3.0, -1.0),
+            float2(-1.0,  3.0)
+        };
+        out.position = float4(positions[vertexID], 0.0, 1.0);
+        return out;
+    }
+
+    fragment float4 fragment_main(VertexOut in [[stage_in]],
+                                  texture2d<uint> idTexture [[texture(0)]],
+                                  constant uint &selectedID [[buffer(0)]]) {
+        if (selectedID == 0) return float4(0.0);
+
+        uint2 coord = uint2(in.position.xy);
+        uint currentID = idTexture.read(coord).r;
+        bool isSelected = (currentID == selectedID);
+
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                uint nID = idTexture.read(uint2(int2(coord) + int2(dx, dy))).r;
+                if (isSelected != (nID == selectedID)) {
+                    return float4(0.95, 0.55, 0.1, 1.0);
+                }
+            }
+        }
+        return float4(0.0);
+    }
+    """
+
     public static let gridVertexShader = """
     #include <metal_stdlib>
     using namespace metal;

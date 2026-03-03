@@ -12,17 +12,65 @@ public enum AIProvider: String, CaseIterable, Identifiable, Codable, Sendable {
 
     public var defaultModel: String {
         switch self {
-        case .openai: return "gpt-4.1"
-        case .anthropic: return "claude-sonnet-4-6-20260217"
+        case .openai: return "gpt-5.2"
+        case .anthropic: return "claude-sonnet-4-6"
         case .gemini: return "gemini-2.5-flash"
         }
     }
 
     public var availableModels: [String] {
         switch self {
-        case .openai: return ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-4o", "gpt-4o-mini", "o4-mini"]
-        case .anthropic: return ["claude-sonnet-4-6-20260217", "claude-opus-4-6-20260205", "claude-sonnet-4-20250514", "claude-4-opus-20250514", "claude-3-5-haiku-20241022"]
-        case .gemini: return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-3.1-pro-preview", "gemini-3-flash-preview"]
+        case .openai: return [
+            "gpt-5.3-codex",
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "o4-mini",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "codex-mini-latest",
+        ]
+        case .anthropic: return [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5-20251001",
+        ]
+        case .gemini: return [
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]
+        }
+    }
+
+    /// Human-readable display name for each model ID.
+    public func displayName(for model: String) -> String {
+        switch model {
+        case "gpt-5.3-codex":              return "GPT-5.3 Codex"
+        case "gpt-5.2":                    return "GPT-5.2"
+        case "gpt-5.2-codex":              return "GPT-5.2 Codex"
+        case "o4-mini":                    return "o4-mini"
+        case "gpt-4.1":                    return "GPT-4.1"
+        case "gpt-4.1-mini":               return "GPT-4.1 Mini"
+        case "gpt-4.1-nano":               return "GPT-4.1 Nano"
+        case "codex-mini-latest":           return "Codex Mini"
+        case "claude-opus-4-6":             return "Claude Opus 4.6"
+        case "claude-sonnet-4-6":           return "Claude Sonnet 4.6"
+        case "claude-opus-4-20250514":      return "Claude Opus 4"
+        case "claude-sonnet-4-20250514":    return "Claude Sonnet 4"
+        case "claude-sonnet-4-5-20250929":  return "Claude Sonnet 4.5"
+        case "claude-haiku-4-5-20251001":   return "Claude Haiku 4.5"
+        case "gemini-3.1-pro-preview":      return "Gemini 3.1 Pro"
+        case "gemini-3-flash-preview":      return "Gemini 3 Flash"
+        case "gemini-2.5-pro":              return "Gemini 2.5 Pro"
+        case "gemini-2.5-flash":            return "Gemini 2.5 Flash"
+        case "gemini-2.5-flash-lite":       return "Gemini 2.5 Flash Lite"
+        default:                            return model
         }
     }
 }
@@ -156,7 +204,14 @@ public enum AIError: LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .notConfigured: return "No API key configured."
-        case .apiError(let p, let s, let m): return "\(p) error (\(s)): \(String(m.prefix(200)))"
+        case .apiError(let p, let s, let m):
+            if let data = m.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? [String: Any],
+               let message = error["message"] as? String {
+                return "\(p) (\(s)): \(message)"
+            }
+            return "\(p) error (\(s)): \(String(m.prefix(300)))"
         case .invalidResponse(let d): return "Invalid AI response: \(d)"
         }
     }

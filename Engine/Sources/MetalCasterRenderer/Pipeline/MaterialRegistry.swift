@@ -60,6 +60,7 @@ public final class MaterialRegistry: @unchecked Sendable {
 
     private var materials: [UUID: MCMaterial] = [:]
     private var pipelineStates: [UUID: MTLRenderPipelineState] = [:]
+    private var hdrPipelineStates: [UUID: MTLRenderPipelineState] = [:]
     private var depthStencilStates: [UUID: MTLDepthStencilState] = [:]
     private var isWarmedUp = false
 
@@ -108,6 +109,11 @@ public final class MaterialRegistry: @unchecked Sendable {
         pipelineStates[materialID]
     }
 
+    /// Returns the pre-compiled HDR (rgba16Float) pipeline state for a built-in material.
+    public func hdrPipelineState(for materialID: UUID) -> MTLRenderPipelineState? {
+        hdrPipelineStates[materialID]
+    }
+
     /// Returns the pre-compiled depth stencil state for a built-in material.
     public func depthStencilState(for materialID: UUID) -> MTLDepthStencilState? {
         depthStencilStates[materialID]
@@ -147,6 +153,19 @@ public final class MaterialRegistry: @unchecked Sendable {
                 pipelineStates[id] = pso
             } catch {
                 print("[MaterialRegistry] Failed to compile \(material.name): \(error)")
+            }
+
+            do {
+                let hdrPSO = try compiler.compileUnifiedPipeline(
+                    source: source,
+                    renderState: material.renderState,
+                    colorFormat: .rgba16Float,
+                    depthFormat: depthFormat,
+                    vertexDescriptor: vertexDescriptor
+                )
+                hdrPipelineStates[id] = hdrPSO
+            } catch {
+                print("[MaterialRegistry] Failed to compile HDR variant of \(material.name): \(error)")
             }
 
             let depthDesc = MTLDepthStencilDescriptor()
@@ -195,6 +214,7 @@ public final class MaterialRegistry: @unchecked Sendable {
     /// Resets all compiled state (e.g. after device loss).
     public func invalidate() {
         pipelineStates.removeAll()
+        hdrPipelineStates.removeAll()
         depthStencilStates.removeAll()
         textureCache.removeAll()
         placeholderWhiteTexture = nil

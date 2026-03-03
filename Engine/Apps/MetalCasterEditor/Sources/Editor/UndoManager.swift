@@ -17,6 +17,8 @@ public struct EntitySnapshot {
     public var light: LightComponent?
     public var manager: ManagerComponent?
     public var skybox: SkyboxComponent?
+    public var postProcessVolume: PostProcessVolumeComponent?
+    public var gameplayScriptRef: GameplayScriptRef?
 
     public static func capture(entity: Entity, world: World) -> EntitySnapshot {
         EntitySnapshot(
@@ -27,7 +29,9 @@ public struct EntitySnapshot {
             camera: world.getComponent(CameraComponent.self, from: entity),
             light: world.getComponent(LightComponent.self, from: entity),
             manager: world.getComponent(ManagerComponent.self, from: entity),
-            skybox: world.getComponent(SkyboxComponent.self, from: entity)
+            skybox: world.getComponent(SkyboxComponent.self, from: entity),
+            postProcessVolume: world.getComponent(PostProcessVolumeComponent.self, from: entity),
+            gameplayScriptRef: world.getComponent(GameplayScriptRef.self, from: entity)
         )
     }
 
@@ -40,6 +44,8 @@ public struct EntitySnapshot {
         if let light { world.addComponent(light, to: entity) }
         if let manager { world.addComponent(manager, to: entity) }
         if let skybox { world.addComponent(skybox, to: entity) }
+        if let postProcessVolume { world.addComponent(postProcessVolume, to: entity) }
+        if let gameplayScriptRef { world.addComponent(gameplayScriptRef, to: entity) }
     }
 
     public var displayName: String {

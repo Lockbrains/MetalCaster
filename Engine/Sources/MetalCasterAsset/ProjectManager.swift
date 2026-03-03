@@ -107,6 +107,7 @@ public final class ProjectManager: @unchecked Sendable {
         try fm.createDirectory(at: url, withIntermediateDirectories: true)
 
         var subdirs = AssetCategory.allCases.map(\.directoryName)
+        subdirs.append("Gameplay/.generated")
         subdirs.append("Library")
         subdirs.append("Library/TextureCache")
         subdirs.append("Library/MeshCache")
@@ -160,6 +161,29 @@ public final class ProjectManager: @unchecked Sendable {
 
     public func directoryURL(for category: AssetCategory) -> URL? {
         projectRoot?.appendingPathComponent(category.directoryName)
+    }
+
+    /// Returns the `.generated` directory inside `Gameplay/`, creating it if needed.
+    public func generatedScriptsDirectory() -> URL? {
+        guard let gameplayDir = directoryURL(for: .gameplay) else { return nil }
+        let genDir = gameplayDir.appendingPathComponent(".generated")
+        try? FileManager.default.createDirectory(at: genDir, withIntermediateDirectories: true)
+        return genDir
+    }
+
+    /// Returns the expected generated Swift file URL for a given `.prompt` file URL.
+    public func generatedScriptURL(for promptURL: URL) -> URL? {
+        guard let genDir = generatedScriptsDirectory() else { return nil }
+        let baseName = promptURL.deletingPathExtension().lastPathComponent
+        let sanitized = baseName.replacingOccurrences(of: " ", with: "")
+            .filter { $0.isLetter || $0.isNumber }
+        return genDir.appendingPathComponent("\(sanitized).swift")
+    }
+
+    /// Checks whether a generated Swift file exists for the given `.prompt` URL.
+    public func hasGeneratedScript(for promptURL: URL) -> Bool {
+        guard let url = generatedScriptURL(for: promptURL) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     public func libraryDirectory() -> URL? {
@@ -465,6 +489,10 @@ public final class ProjectManager: @unchecked Sendable {
             let dir = root.appendingPathComponent(cat.directoryName)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        try? fm.createDirectory(
+            at: root.appendingPathComponent("Gameplay/.generated"),
+            withIntermediateDirectories: true
+        )
         let libraryDirs = ["Library", "Library/TextureCache", "Library/MeshCache", "Library/ShaderCache", "Library/Thumbnails"]
         for dir in libraryDirs {
             try? fm.createDirectory(

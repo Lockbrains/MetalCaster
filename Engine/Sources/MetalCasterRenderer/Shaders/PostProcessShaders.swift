@@ -97,9 +97,11 @@ public struct PostProcessShaders {
     }
 
     // Circle of Confusion diameter in pixels
+    // Standard thin-lens formula: CoC = (f²/N) * |S-D| / (D*(S-f))
     static float computeCoC(float depth, float focusDistance, float aperture, float focalLengthM, float sensorHeightM, float screenHeight) {
         float focalLengthPx = focalLengthM * screenHeight / sensorHeightM;
-        float coc = abs(aperture * focalLengthPx * (focusDistance - depth) / (depth * (focusDistance - focalLengthM)));
+        float N = max(aperture, 0.1f);
+        float coc = abs(focalLengthPx * (focusDistance - depth) / (N * depth * (focusDistance - focalLengthM)));
         return clamp(coc, 0.0f, 40.0f);
     }
 

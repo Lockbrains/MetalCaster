@@ -9,6 +9,8 @@ struct ProjectAssetsView: View {
     @Environment(EditorState.self) private var state
     @State private var showNewScriptAlert = false
     @State private var newScriptName = ""
+    @State private var showNewPromptAlert = false
+    @State private var newPromptName = ""
     @State private var showNewMaterialAlert = false
     @State private var newMaterialName = ""
     @State private var newMaterialShader = "lit"
@@ -41,6 +43,20 @@ struct ProjectAssetsView: View {
             }
         } message: {
             Text("Enter a name for the new gameplay script.")
+        }
+        .alert("New Prompt Script", isPresented: $showNewPromptAlert) {
+            TextField("Prompt name", text: $newPromptName)
+            Button("Create") {
+                let name = newPromptName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                state.createPromptScript(named: name)
+                newPromptName = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newPromptName = ""
+            }
+        } message: {
+            Text("Enter a name for the prompt script. Describe behavior in natural language — the engine generates Swift code via AI.")
         }
         .alert("New Material", isPresented: $showNewMaterialAlert) {
             TextField("Material name", text: $newMaterialName)
@@ -227,10 +243,17 @@ struct ProjectAssetsView: View {
 
         if state.selectedAssetCategory == .gameplay {
             Button {
+                newPromptName = ""
+                showNewPromptAlert = true
+            } label: {
+                Label("New Prompt Script", systemImage: "text.bubble")
+            }
+
+            Button {
                 newScriptName = ""
                 showNewScriptAlert = true
             } label: {
-                Label("New Script", systemImage: "chevron.left.forwardslash.chevron.right")
+                Label("New Swift Script", systemImage: "chevron.left.forwardslash.chevron.right")
             }
 
             Divider()
@@ -482,41 +505,121 @@ struct AssetListRow: View {
             }
     }
 
-    private func rowContent(isSelected: Bool) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: entry.isDirectory ? "folder.fill" : fileIcon)
-                .font(.system(size: 11))
-                .foregroundStyle(entry.isDirectory ? MCTheme.statusBlue : MCTheme.textSecondary)
-                .frame(width: 16)
+    private var isPromptFile: Bool {
+        entry.fileExtension.lowercased() == "prompt"
+    }
 
-            if isRenaming {
-                TextField("", text: $renameText, onCommit: {
-                    commitRename()
-                })
-                .textFieldStyle(.plain)
-                .font(MCTheme.fontCaption)
-                .foregroundStyle(MCTheme.textPrimary)
-            } else {
-                Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
+    private func rowContent(isSelected: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: entry.isDirectory ? "folder.fill" : fileIcon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(entry.isDirectory ? MCTheme.statusBlue : iconColor)
+                    .frame(width: 16)
+
+                if isRenaming {
+                    TextField("", text: $renameText, onCommit: {
+                        commitRename()
+                    })
+                    .textFieldStyle(.plain)
                     .font(MCTheme.fontCaption)
                     .foregroundStyle(MCTheme.textPrimary)
-                    .lineLimit(1)
+                } else {
+                    Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textPrimary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                if isPromptFile {
+                    promptStatusIndicator
+                } else if !entry.isDirectory && entry.fileSize > 0 {
+                    Text(formatFileSize(entry.fileSize))
+                        .font(MCTheme.fontSmall)
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .monospacedDigit()
+                }
             }
+            .padding(.horizontal, 8)
+            .frame(height: MCTheme.rowHeight)
 
-            Spacer()
-
-            if !entry.isDirectory && entry.fileSize > 0 {
-                Text(formatFileSize(entry.fileSize))
-                    .font(MCTheme.fontSmall)
-                    .foregroundStyle(MCTheme.textTertiary)
-                    .monospacedDigit()
+            if isPromptFile && isSelected {
+                promptSubordinateRow
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: MCTheme.rowHeight)
         .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
         .contentShape(Rectangle())
         .draggable(entry.guid.uuidString)
+    }
+
+    private var iconColor: Color {
+        isPromptFile ? Color.purple : MCTheme.textSecondary
+    }
+
+    @ViewBuilder
+    private var promptStatusIndicator: some View {
+        let key = "\(entry.name).\(entry.fileExtension)"
+        let status = state.promptCompileStatuses[key]
+        let hasGenerated = state.hasGeneratedScript(for: entry)
+
+        switch status {
+        case .compiling:
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.7)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(MCTheme.statusRed)
+        case .success:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(MCTheme.statusGreen)
+        default:
+            if hasGenerated {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(MCTheme.statusGreen.opacity(0.5))
+            } else {
+                Image(systemName: "circle.dashed")
+                    .font(.system(size: 9))
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var promptSubordinateRow: some View {
+        let hasGenerated = state.hasGeneratedScript(for: entry)
+
+        HStack(spacing: 6) {
+            Color.clear.frame(width: 16)
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 8))
+                .foregroundStyle(MCTheme.textTertiary)
+            Image(systemName: "swift")
+                .font(.system(size: 9))
+                .foregroundStyle(hasGenerated ? MCTheme.textSecondary : MCTheme.textTertiary)
+            Text("\(entry.name).swift")
+                .font(MCTheme.fontSmall)
+                .foregroundStyle(hasGenerated ? MCTheme.textSecondary : MCTheme.textTertiary)
+                .italic(!hasGenerated)
+            if !hasGenerated {
+                Text("(not generated)")
+                    .font(MCTheme.fontSmall)
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 18)
+        .onTapGesture {
+            if hasGenerated {
+                openGeneratedScript()
+            }
+        }
     }
 
     @ViewBuilder
@@ -532,6 +635,24 @@ struct AssetListRow: View {
                 handleDoubleClick()
             } label: {
                 Label("Open", systemImage: "arrow.up.forward.square")
+            }
+        }
+
+        if isPromptFile {
+            Divider()
+
+            Button {
+                compilePrompt()
+            } label: {
+                Label("Compile Prompt", systemImage: "sparkles")
+            }
+
+            if state.hasGeneratedScript(for: entry) {
+                Button {
+                    openGeneratedScript()
+                } label: {
+                    Label("View Generated Swift", systemImage: "swift")
+                }
             }
         }
 
@@ -588,15 +709,47 @@ struct AssetListRow: View {
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
                     state.assignMaterialAsset(from: url)
                 }
+            case .gameplay:
+                if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                    if entry.fileExtension.lowercased() == "prompt" {
+                        state.editingPromptURL = url
+                    } else {
+                        #if os(macOS)
+                        openWithTextEditor(url)
+                        #endif
+                    }
+                }
             default:
                 #if os(macOS)
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
-                    NSWorkspace.shared.open(url)
+                    openWithTextEditor(url)
                 }
                 #endif
             }
         }
     }
+
+    #if os(macOS)
+    private func openWithTextEditor(_ url: URL) {
+        let ext = url.pathExtension.lowercased()
+        let textEditable: Set<String> = ["prompt", "swift", "metal", "json", "txt", "usda"]
+
+        if textEditable.contains(ext) {
+            let xcodeBundleID = "com.apple.dt.Xcode"
+            if let xcodeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: xcodeBundleID) {
+                NSWorkspace.shared.open(
+                    [url],
+                    withApplicationAt: xcodeURL,
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+            } else {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    #endif
 
     private func commitRename() {
         isRenaming = false
@@ -613,6 +766,21 @@ struct AssetListRow: View {
         state.refreshAssetBrowser()
     }
 
+    private func compilePrompt() {
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return }
+        Task {
+            await state.compilePromptScript(at: url)
+        }
+    }
+
+    private func openGeneratedScript() {
+        #if os(macOS)
+        guard let genURL = state.generatedScriptURL(for: entry),
+              FileManager.default.fileExists(atPath: genURL.path) else { return }
+        NSWorkspace.shared.open(genURL)
+        #endif
+    }
+
     private var fileIcon: String {
         if entry.category == .scenes && entry.fileExtension == "usda" {
             return "film"
@@ -626,6 +794,7 @@ struct AssetListRow: View {
         case "wav", "mp3", "aac", "m4a", "ogg": return "speaker.wave.2"
         case "mcprefab": return "square.on.square"
         case "swift": return "swift"
+        case "prompt": return "text.bubble"
         default: return "doc"
         }
     }

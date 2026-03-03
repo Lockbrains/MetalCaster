@@ -172,6 +172,8 @@ final class EditorEngineAPI: EngineAPIProvider {
         // ── Gameplay Script Tools ────────────────────────────────────
         case "createScript":
             return toolCreateScript(arguments)
+        case "createPromptScript":
+            return toolCreatePromptScript(arguments)
 
         // ── Asset Tools ──────────────────────────────────────────────
         case "listAssets":
@@ -763,6 +765,44 @@ final class EditorEngineAPI: EngineAPIProvider {
                               output: "Created gameplay script '\(filename)' with \(sanitized)Component + \(sanitized)System")
         } catch {
             return ToolResult(toolName: "createScript", success: false, output: "Failed to write script: \(error)")
+        }
+    }
+
+    @MainActor
+    private func toolCreatePromptScript(_ args: [String: JSONValue]) -> ToolResult {
+        guard let name = args["name"]?.stringValue, !name.isEmpty else {
+            return ToolResult(toolName: "createPromptScript", success: false, output: "Missing or empty 'name' argument")
+        }
+
+        let sanitized = name.replacingOccurrences(of: " ", with: "")
+            .filter { $0.isLetter || $0.isNumber }
+        guard !sanitized.isEmpty else {
+            return ToolResult(toolName: "createPromptScript", success: false, output: "Name must contain letters or digits")
+        }
+
+        guard let dir = state.projectManager.directoryURL(for: .gameplay) else {
+            return ToolResult(toolName: "createPromptScript", success: false, output: "Gameplay directory not available")
+        }
+
+        let filename = "\(sanitized).prompt"
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            return ToolResult(toolName: "createPromptScript", success: false, output: "Prompt script '\(filename)' already exists")
+        }
+
+        let content = PromptScriptTemplate.generate(name: name)
+        do {
+            try content.write(to: fileURL, options: .atomic)
+            _ = state.projectManager.ensureMeta(for: "Gameplay/\(filename)", type: .gameplay)
+            state.refreshAssetBrowser()
+            return ToolResult(
+                toolName: "createPromptScript",
+                success: true,
+                output: "Created prompt script '\(filename)'. User can fill in the template and compile to generate Swift ECS code."
+            )
+        } catch {
+            return ToolResult(toolName: "createPromptScript", success: false, output: "Failed to write prompt script: \(error)")
         }
     }
 

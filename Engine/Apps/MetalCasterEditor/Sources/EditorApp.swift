@@ -144,7 +144,7 @@ struct MetalCasterEditorApp: App {
             }
 
             CommandMenu("Build") {
-                Button("Play in Editor") {
+                Button(editorState?.buildSystem.isPlaying == true ? "Stop" : "Play in Editor") {
                     editorState?.playInEditor()
                 }
                 .keyboardShortcut("r")
@@ -172,6 +172,12 @@ struct MetalCasterEditorApp: App {
                     editorState?.showAIChat.toggle()
                 }
                 .keyboardShortcut("l")
+                .disabled(editorState == nil)
+
+                Button("AI Settings...") {
+                    editorState?.showAISettings = true
+                }
+                .keyboardShortcut(",", modifiers: [.command, .option])
                 .disabled(editorState == nil)
             }
         }

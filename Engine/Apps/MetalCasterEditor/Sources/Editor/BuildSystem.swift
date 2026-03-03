@@ -63,10 +63,24 @@ public enum BuildStatus: Equatable {
 public final class BuildSystem {
     public var status: BuildStatus = .idle
     public var buildLog: [String] = []
+    public var isPlaying: Bool = false
+    public private(set) var previewProcess: Process?
 
     private let sceneSerializer = SceneSerializer()
     private let sceneBundler = SceneBundler()
+    private let scriptScanner = GameplayScriptScanner()
     private let fileManager = FileManager.default
+
+    @ObservationIgnored private var _previewBuildDir: URL?
+    /// Reusable temp directory for preview builds (enables incremental compilation).
+    private var previewBuildDir: URL {
+        if let dir = _previewBuildDir { return dir }
+        let dir = fileManager.temporaryDirectory
+            .appendingPathComponent("MetalCaster_Preview", isDirectory: true)
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        _previewBuildDir = dir
+        return dir
+    }
 
     public init() {}
 
@@ -173,18 +187,370 @@ public final class BuildSystem {
         return projectDir
     }
 
-    public func runInEditor(scene: SceneGraph, world: World) async {
+    public func runInEditor(
+        scene: SceneGraph,
+        world: World,
+        gameplayDirectories: [URL],
+        enginePackagePath: URL
+    ) async {
+        guard !isPlaying else {
+            log("Already playing — stop before starting again")
+            return
+        }
+
         status = .building(stage: "Preparing", progress: 0)
         buildLog.removeAll()
 
         do {
-            _ = try sceneSerializer.serialize(sceneGraph: scene, world: world)
-            log("Play mode started")
+            // 1) Save scene to temp USDA
+            status = .building(stage: "Saving scene", progress: 0.05)
+            let tempSceneURL = previewBuildDir.appendingPathComponent("preview_scene.usda")
+            let exporter = USDExporter()
+            try exporter.writeScene(sceneGraph: scene, world: world, to: tempSceneURL)
+            log("Scene saved to \(tempSceneURL.lastPathComponent)")
+
+            // 2) Collect gameplay .swift files
+            status = .building(stage: "Collecting scripts", progress: 0.15)
+            let swiftFiles = collectSwiftFiles(in: gameplayDirectories)
+            log("Found \(swiftFiles.count) gameplay script(s)")
+
+            // 3) Scan for System/Component class names
+            status = .building(stage: "Scanning scripts", progress: 0.25)
+            let entries = scriptScanner.scan(directories: gameplayDirectories)
+            let systemEntries = entries.filter { !$0.className.isEmpty }
+            log("Discovered \(systemEntries.count) system(s)")
+
+            // 4) Generate preview SPM package
+            status = .building(stage: "Generating preview package", progress: 0.35)
+            let projectDir = previewBuildDir.appendingPathComponent("GamePreview", isDirectory: true)
+            let sourcesDir = projectDir.appendingPathComponent("Sources", isDirectory: true)
+                .appendingPathComponent("GamePreview", isDirectory: true)
+            try fileManager.createDirectory(at: sourcesDir, withIntermediateDirectories: true)
+
+            // Copy gameplay .swift files
+            for file in swiftFiles {
+                let dest = sourcesDir.appendingPathComponent(file.lastPathComponent)
+                try? fileManager.removeItem(at: dest)
+                try fileManager.copyItem(at: file, to: dest)
+            }
+
+            // Generate Package.swift
+            let packageSwift = generatePreviewPackageSwift(enginePackagePath: enginePackagePath)
+            let packageURL = projectDir.appendingPathComponent("Package.swift")
+            try packageSwift.write(to: packageURL, atomically: true, encoding: .utf8)
+
+            // Generate app entry point (NOT main.swift — @main conflicts with main.swift)
+            let mainSwift = generatePreviewMainSwift(
+                systems: systemEntries,
+                sceneURL: tempSceneURL
+            )
+            let mainURL = sourcesDir.appendingPathComponent("GamePreviewApp.swift")
+            try mainSwift.write(to: mainURL, atomically: true, encoding: .utf8)
+            // Remove stale main.swift from previous runs
+            let staleMain = sourcesDir.appendingPathComponent("main.swift")
+            try? fileManager.removeItem(at: staleMain)
+            log("Preview package generated at \(projectDir.path)")
+
+            // 5) swift build
+            status = .building(stage: "Compiling", progress: 0.5)
+            log("Running swift build...")
+            let buildProcess = Process()
+            buildProcess.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+            buildProcess.arguments = ["build", "--package-path", projectDir.path]
+            buildProcess.environment = ProcessInfo.processInfo.environment
+
+            let pipe = Pipe()
+            buildProcess.standardOutput = pipe
+            buildProcess.standardError = pipe
+            try buildProcess.run()
+            buildProcess.waitUntilExit()
+
+            let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: outputData, encoding: .utf8) ?? ""
+            for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+                log(line)
+            }
+
+            guard buildProcess.terminationStatus == 0 else {
+                throw BuildError.projectGenerationFailed(
+                    "swift build failed (exit \(buildProcess.terminationStatus))"
+                )
+            }
+            log("Build succeeded")
+
+            // 6) Locate and launch executable
+            status = .building(stage: "Launching", progress: 0.9)
+            let executableURL = locateBuiltExecutable(in: projectDir)
+            guard let executableURL else {
+                throw BuildError.projectGenerationFailed("Could not find built executable")
+            }
+
+            let gameProcess = Process()
+            gameProcess.executableURL = executableURL
+            gameProcess.arguments = [tempSceneURL.path]
+
+            let gamePipe = Pipe()
+            gameProcess.standardOutput = gamePipe
+            gameProcess.standardError = gamePipe
+            gamePipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty,
+                      let text = String(data: data, encoding: .utf8) else { return }
+                let lines = text.components(separatedBy: .newlines)
+                    .filter { !$0.isEmpty }
+                DispatchQueue.main.async {
+                    for line in lines {
+                        self?.log("[Preview] \(line)")
+                    }
+                }
+            }
+
+            gameProcess.terminationHandler = { [weak self] proc in
+                gamePipe.fileHandleForReading.readabilityHandler = nil
+                DispatchQueue.main.async {
+                    let code = proc.terminationStatus
+                    if code != 0 {
+                        self?.log("[Preview] Process exited with code \(code)")
+                    }
+                    self?.isPlaying = false
+                    self?.previewProcess = nil
+                    self?.status = .idle
+                    self?.log("Preview process exited")
+                }
+            }
+            try gameProcess.run()
+            previewProcess = gameProcess
+            isPlaying = true
             status = .idle
+            log("Game preview launched (PID \(gameProcess.processIdentifier))")
+
         } catch {
             status = .failed(error: error.localizedDescription)
             log("Play mode failed: \(error.localizedDescription)")
         }
+    }
+
+    public func stopPreview() {
+        guard let process = previewProcess, process.isRunning else {
+            isPlaying = false
+            previewProcess = nil
+            return
+        }
+        process.terminate()
+        log("Stopped preview process (PID \(process.processIdentifier))")
+        isPlaying = false
+        previewProcess = nil
+        status = .idle
+    }
+
+    private func collectSwiftFiles(in directories: [URL]) -> [URL] {
+        var files: [URL] = []
+        for dir in directories where fileManager.fileExists(atPath: dir.path) {
+            guard let enumerator = fileManager.enumerator(
+                at: dir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
+            while let obj = enumerator.nextObject() {
+                guard let fileURL = obj as? URL, fileURL.pathExtension == "swift" else { continue }
+                files.append(fileURL)
+            }
+        }
+        return files
+    }
+
+    private func locateBuiltExecutable(in projectDir: URL) -> URL? {
+        let debugPath = projectDir.appendingPathComponent(".build/debug/GamePreview")
+        if fileManager.isExecutableFile(atPath: debugPath.path) { return debugPath }
+        let releasePath = projectDir.appendingPathComponent(".build/release/GamePreview")
+        if fileManager.isExecutableFile(atPath: releasePath.path) { return releasePath }
+        return nil
+    }
+
+    private func generatePreviewPackageSwift(enginePackagePath: URL) -> String {
+        let pkgIdentity = enginePackagePath.lastPathComponent
+        return """
+        // swift-tools-version: 6.0
+        import PackageDescription
+
+        let package = Package(
+            name: "GamePreview",
+            platforms: [.macOS(.v15)],
+            dependencies: [
+                .package(path: "\(enginePackagePath.path)")
+            ],
+            targets: [
+                .executableTarget(
+                    name: "GamePreview",
+                    dependencies: [
+                        .product(name: "MetalCasterCore", package: "\(pkgIdentity)"),
+                        .product(name: "MetalCasterRenderer", package: "\(pkgIdentity)"),
+                        .product(name: "MetalCasterScene", package: "\(pkgIdentity)"),
+                    ],
+                    path: "Sources/GamePreview",
+                    swiftSettings: [.swiftLanguageMode(.v5)]
+                )
+            ]
+        )
+        """
+    }
+
+    private func generatePreviewMainSwift(
+        systems: [GameplayScriptEntry],
+        sceneURL: URL
+    ) -> String {
+        let systemRegistrations = systems.map { entry in
+            "        engine.addSystem(\(entry.className)())"
+        }.joined(separator: "\n")
+
+        let scriptRefMapping = systems.map { entry in
+            let name = entry.displayName
+            let compName = entry.componentName ?? "\(entry.className.replacingOccurrences(of: "System", with: ""))Component"
+            return "            case \"\(name)\":\n                world.addComponent(\(compName)(), to: entity)"
+        }.joined(separator: "\n")
+
+        return """
+        import SwiftUI
+        import simd
+        import MetalCasterCore
+        import MetalCasterRenderer
+        import MetalCasterScene
+
+        @Observable
+        final class PreviewRuntime {
+            let engine = Engine()
+            let sceneGraph: SceneGraph
+            let usdImporter = USDImporter()
+            let transformSystem = TransformSystem()
+            let cameraSystem = CameraSystem()
+            let lightingSystem = LightingSystem()
+            let meshRenderSystem = MeshRenderSystem()
+            let skyboxSystem = SkyboxSystem()
+            let postProcessVolumeSystem = PostProcessVolumeSystem()
+
+            init() {
+                sceneGraph = SceneGraph(world: engine.world)
+                engine.addSystem(transformSystem)
+                engine.addSystem(cameraSystem)
+                engine.addSystem(lightingSystem)
+                engine.addSystem(skyboxSystem)
+                engine.addSystem(meshRenderSystem)
+                engine.addSystem(postProcessVolumeSystem)
+
+        \(systemRegistrations.isEmpty ? "        // No gameplay systems discovered" : systemRegistrations)
+            }
+
+            func loadScene(from url: URL) throws {
+                try usdImporter.loadScene(from: url, into: engine.world, sceneGraph: sceneGraph)
+                mapScriptRefs()
+            }
+
+            private func mapScriptRefs() {
+                let world = engine.world
+                for (entity, ref) in world.query(GameplayScriptRef.self) {
+                    switch ref.scriptName {
+        \(scriptRefMapping.isEmpty ? "            default: break" : scriptRefMapping + "\n            default: break")
+                    }
+                }
+            }
+
+            func start() {
+                engine.start()
+            }
+        }
+
+        #if canImport(AppKit)
+        import AppKit
+
+        final class PreviewAppDelegate: NSObject, NSApplicationDelegate {
+            func applicationDidFinishLaunching(_ notification: Notification) {
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+
+            func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+                true
+            }
+        }
+        #endif
+
+        @main
+        struct GamePreviewApp: App {
+            #if canImport(AppKit)
+            @NSApplicationDelegateAdaptor(PreviewAppDelegate.self) var appDelegate
+            #endif
+            @State private var runtime = PreviewRuntime()
+
+            var body: some Scene {
+                WindowGroup("Metal Caster — Preview") {
+                    PreviewContentView(runtime: runtime)
+                }
+            }
+        }
+
+        struct PreviewContentView: View {
+            let runtime: PreviewRuntime
+
+            var body: some View {
+                #if canImport(AppKit)
+                PreviewMetalView(runtime: runtime)
+                    .onAppear { loadScene() }
+                    .frame(minWidth: 960, minHeight: 640)
+                #else
+                Text("Preview viewport")
+                #endif
+            }
+
+            private func loadScene() {
+                let args = CommandLine.arguments
+                guard args.count > 1 else { return }
+                let sceneURL = URL(fileURLWithPath: args[1])
+                guard FileManager.default.fileExists(atPath: sceneURL.path) else { return }
+                do {
+                    try runtime.loadScene(from: sceneURL)
+                } catch {
+                    print("[GamePreview] Scene load error: \\(error)")
+                }
+                runtime.start()
+            }
+        }
+
+        #if canImport(AppKit)
+        import MetalKit
+
+        struct PreviewMetalView: NSViewRepresentable {
+            let runtime: PreviewRuntime
+
+            func makeNSView(context: Context) -> MTKView {
+                let view = MTKView()
+                view.device = MTLCreateSystemDefaultDevice()
+                view.clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1)
+                view.depthStencilPixelFormat = .depth32Float
+                view.colorPixelFormat = .bgra8Unorm_srgb
+                let renderer = GameViewRenderer(
+                    engine: runtime.engine,
+                    cameraSystem: runtime.cameraSystem,
+                    lightingSystem: runtime.lightingSystem,
+                    meshRenderSystem: runtime.meshRenderSystem,
+                    skyboxSystem: runtime.skyboxSystem,
+                    postProcessVolumeSystem: runtime.postProcessVolumeSystem
+                )
+                renderer.setup(device: view.device!)
+                view.delegate = renderer
+                context.coordinator.renderer = renderer
+                return view
+            }
+
+            func updateNSView(_ nsView: MTKView, context: Context) {}
+
+            func makeCoordinator() -> Coordinator { Coordinator() }
+
+            class Coordinator {
+                var renderer: GameViewRenderer?
+            }
+        }
+        #endif
+        """
     }
 
     #if os(macOS)

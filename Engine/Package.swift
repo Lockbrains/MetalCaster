@@ -11,6 +11,7 @@ let package = Package(
         .visionOS(.v2)
     ],
     products: [
+        .library(name: "MetalCasterMath", targets: ["MetalCasterMath"]),
         .library(name: "MetalCasterCore", targets: ["MetalCasterCore"]),
         .library(name: "MetalCasterRenderer", targets: ["MetalCasterRenderer"]),
         .library(name: "MetalCasterScene", targets: ["MetalCasterScene"]),
@@ -21,10 +22,17 @@ let package = Package(
         .library(name: "MetalCasterAI", targets: ["MetalCasterAI"]),
     ],
     targets: [
+        // ── Math Library ───────────────────────────────────────────
+        .target(
+            name: "MetalCasterMath",
+            path: "Sources/MetalCasterMath",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+
         // ── Core Engine Libraries ──────────────────────────────────
         .target(
             name: "MetalCasterCore",
-            dependencies: ["MetalCasterInput"],
+            dependencies: ["MetalCasterInput", "MetalCasterMath"],
             path: "Sources/MetalCasterCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -66,7 +74,7 @@ let package = Package(
         ),
         .target(
             name: "MetalCasterAI",
-            dependencies: ["MetalCasterCore"],
+            dependencies: ["MetalCasterCore", "MetalCasterAsset"],
             path: "Sources/MetalCasterAI",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

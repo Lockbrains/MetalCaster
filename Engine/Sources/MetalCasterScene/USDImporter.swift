@@ -111,10 +111,10 @@ public final class USDImporter {
             sidecar = try JSONDecoder().decode(SceneSidecar.self, from: data)
         }
         
-        let sidecarMap = buildSidecarMap(sidecar)
+        let sidecarLookup = buildSidecarLookup(sidecar)
         let lines = usdaString.components(separatedBy: .newlines)
         
-        parsePrims(lines: lines, into: world, sceneGraph: sceneGraph, sidecarMap: sidecarMap, parent: nil)
+        parsePrims(lines: lines, into: world, sceneGraph: sceneGraph, sidecarMap: sidecarLookup, parent: nil)
     }
     
     // MARK: - USDA Parser
@@ -123,7 +123,7 @@ public final class USDImporter {
         lines: [String],
         into world: World,
         sceneGraph: SceneGraph,
-        sidecarMap: [String: SceneSidecar.EntityMeta],
+        sidecarMap: SidecarLookup,
         parent: Entity?
     ) {
         var i = 0
@@ -217,12 +217,14 @@ public final class USDImporter {
         propertyLines: [String],
         world: World,
         sceneGraph: SceneGraph,
-        sidecarMap: [String: SceneSidecar.EntityMeta],
+        sidecarMap: SidecarLookup,
         parent: Entity?
     ) -> Entity {
-        let displayName = primName.replacingOccurrences(of: "_", with: " ")
+        // Recover original display name from sidecar if available
+        let entityID = parseEntityID(from: propertyLines)
+        let meta = sidecarMap.lookup(entityID: entityID, primName: primName)
+        let displayName = meta?.entityName ?? primName.replacingOccurrences(of: "_", with: " ")
         let entity = sceneGraph.createEntity(name: displayName, parent: parent)
-        let meta = sidecarMap[primName]
         
         if let transform = parseTransform(from: propertyLines) {
             var tc = world.getComponent(TransformComponent.self, from: entity)!
@@ -272,9 +274,16 @@ public final class USDImporter {
             if let sky = meta?.skybox {
                 world.addComponent(sky, to: entity)
             }
+            if let ppv = meta?.postProcessVolume {
+                world.addComponent(ppv, to: entity)
+            }
             
         default:
             break
+        }
+
+        if let scriptRef = meta?.gameplayScriptRef {
+            world.addComponent(scriptRef, to: entity)
         }
         
         return entity
@@ -296,7 +305,7 @@ public final class USDImporter {
             if trimmed.contains("xformOp:scale") && !trimmed.contains("xformOpOrder") {
                 scale = parseFloat3(from: trimmed)
             }
-            if trimmed.contains("xformOp:orient") {
+            if trimmed.contains("xformOp:orient") && !trimmed.contains("xformOpOrder") {
                 rotation = parseQuat(from: trimmed)
             }
         }
@@ -476,17 +485,55 @@ public final class USDImporter {
         return String(line[line.index(after: secondQuote)..<firstQuote])
     }
     
-    // MARK: - Sidecar Helpers
-    
-    private func buildSidecarMap(_ sidecar: SceneSidecar?) -> [String: SceneSidecar.EntityMeta] {
-        guard let sidecar = sidecar else { return [:] }
-        var map: [String: SceneSidecar.EntityMeta] = [:]
-        for entry in sidecar.entities {
-            let sanitized = entry.entityName
-                .replacingOccurrences(of: " ", with: "_")
-                .replacingOccurrences(of: "-", with: "_")
-            map[sanitized] = entry
+    // MARK: - Entity ID Parser
+
+    private func parseEntityID(from lines: [String]) -> UInt64? {
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains("mc:entityID") {
+                let parts = trimmed.split(separator: "=")
+                guard parts.count >= 2 else { continue }
+                let valStr = parts.last!.trimmingCharacters(in: .whitespaces)
+                return UInt64(valStr)
+            }
         }
-        return map
+        return nil
+    }
+
+    // MARK: - Sidecar Helpers
+
+    /// Dual-key lookup: entity ID (primary, unique) → prim name (fallback for legacy sidecars).
+    struct SidecarLookup {
+        var byID: [UInt64: SceneSidecar.EntityMeta] = [:]
+        var byPrimName: [String: SceneSidecar.EntityMeta] = [:]
+
+        func lookup(entityID: UInt64?, primName: String) -> SceneSidecar.EntityMeta? {
+            if let eid = entityID, let meta = byID[eid] { return meta }
+            return byPrimName[primName]
+        }
+    }
+
+    private func buildSidecarLookup(_ sidecar: SceneSidecar?) -> SidecarLookup {
+        guard let sidecar = sidecar else { return SidecarLookup() }
+        var lookup = SidecarLookup()
+        for entry in sidecar.entities {
+            if let eid = entry.entityID {
+                lookup.byID[eid] = entry
+            }
+            // Prim name fallback (for legacy or as secondary key)
+            if let pn = entry.primName {
+                lookup.byPrimName[pn] = entry
+            } else {
+                var sanitized = entry.entityName
+                    .replacingOccurrences(of: " ", with: "_")
+                    .replacingOccurrences(of: "-", with: "_")
+                let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+                sanitized = sanitized.unicodeScalars.filter { allowed.contains($0) }.map { String($0) }.joined()
+                if sanitized.isEmpty { sanitized = "unnamed" }
+                if let first = sanitized.first, first.isNumber { sanitized = "_" + sanitized }
+                lookup.byPrimName[sanitized] = entry
+            }
+        }
+        return lookup
     }
 }

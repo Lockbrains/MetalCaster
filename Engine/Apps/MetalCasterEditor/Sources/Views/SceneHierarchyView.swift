@@ -72,6 +72,7 @@ struct SceneHierarchyView: View {
                 let hasSkybox = !state.engine.world.query(SkyboxComponent.self).isEmpty
                 Button("Skybox") { state.addSkybox() }
                     .disabled(hasSkybox)
+                Button("Post Process Volume") { state.addPostProcessVolume() }
             }
             Divider()
             managersSubmenu

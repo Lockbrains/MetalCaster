@@ -1,0 +1,105 @@
+// MetalCaster Prompt Script — Xcode Syntax Coloring
+
+(
+
+    // -------------------------------------------------------------------------
+    // MARK: Comment (// ...)
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt.comment.singleline";
+        Syntax = {
+            Start = "//";
+            End = "\n";
+            IncludeRules = (
+                "xcode.lang.url",
+                "xcode.lang.url.mail",
+                "xcode.lang.comment.mark",
+            );
+            Type = "xcode.syntax.comment";
+        };
+    },
+
+    // -------------------------------------------------------------------------
+    // MARK: Section header / footer (--- ... ---)
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt.header";
+        Syntax = {
+            Start = "---";
+            End = "---";
+            Type = "xcode.syntax.preprocessor";
+        };
+    },
+
+    // -------------------------------------------------------------------------
+    // MARK: Bracket content [user prompt text]
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt.bracket";
+        Syntax = {
+            Start = "[";
+            End = "]";
+            Recursive = YES;
+            Type = "xcode.syntax.string";
+        };
+    },
+
+    // -------------------------------------------------------------------------
+    // MARK: Field label keywords
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt.identifier";
+        Syntax = {
+            StartChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            Chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -";
+            Words = (
+                "Name",
+                "Initial State",
+                "Per-Frame Behavior",
+                "Public Interface",
+            );
+            Type = "xcode.syntax.keyword";
+            AltType = "xcode.syntax.plain";
+        };
+    },
+
+    // -------------------------------------------------------------------------
+    // MARK: Lexer — token ordering
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt.lexer";
+        Syntax = {
+            IncludeRules = (
+                "xcode.lang.mcprompt.comment.singleline",
+                "xcode.lang.mcprompt.header",
+                "xcode.lang.mcprompt.bracket",
+                "xcode.lang.mcprompt.identifier",
+            );
+        };
+    },
+
+    // -------------------------------------------------------------------------
+    // MARK: Top-level language definition
+    // -------------------------------------------------------------------------
+
+    {
+        Identifier = "xcode.lang.mcprompt";
+        Description = "MetalCaster Prompt Script";
+        BasedOn = "xcode.lang.simpleColoring";
+        IncludeInMenu = YES;
+        Name = "MetalCaster Prompt";
+        Syntax = {
+            Tokenizer = "xcode.lang.mcprompt.lexer";
+            IncludeRules = (
+                "xcode.lang.mcprompt.bracket",
+            );
+            Type = "xcode.syntax.plain";
+        };
+    },
+
+)

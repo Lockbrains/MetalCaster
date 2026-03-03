@@ -76,7 +76,7 @@ struct MCDraggableField: View {
             TextField("", text: $editText)
                 .textFieldStyle(.plain)
                 .mcInputStyle()
-                .frame(width: 50)
+                .frame(maxWidth: .infinity)
                 .focused($isFocused)
                 .onSubmit { commitEdit() }
                 .onChange(of: isFocused) { _, focused in
@@ -90,9 +90,11 @@ struct MCDraggableField: View {
             Text(String(format: "%.2f", shownValue))
                 .font(MCTheme.fontBody)
                 .foregroundStyle(MCTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .frame(width: 50, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(MCTheme.inputBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)

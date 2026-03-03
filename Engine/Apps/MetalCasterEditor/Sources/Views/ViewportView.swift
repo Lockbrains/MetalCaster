@@ -17,12 +17,68 @@ struct SceneEditorView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ZStack(alignment: .topTrailing) {
-                EditorMetalView(viewportID: 0, state: state)
+                ZStack(alignment: .top) {
+                    EditorMetalView(viewportID: 0, state: state)
+                    playToolbar
+                }
                 statsOverlay
             }
             SceneOverlayPanel()
         }
         .background(Color.black)
+    }
+
+    private var playToolbar: some View {
+        HStack(spacing: 8) {
+            Button {
+                state.playInEditor()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: state.buildSystem.isPlaying ? "stop.fill" : "play.fill")
+                        .font(.system(size: 10))
+                    Text(state.buildSystem.isPlaying ? "Stop" : "Play")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(state.buildSystem.isPlaying ? .red : .green)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("r")
+
+            if case .building(let stage, _) = state.buildSystem.status {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(stage)
+                        .font(.system(size: 10))
+                        .foregroundStyle(MCTheme.textSecondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+
+            if case .failed(let error) = state.buildSystem.status {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .font(.system(size: 10))
+                    Text("Build Failed")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.red)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.6))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .help(error)
+            }
+        }
+        .padding(.top, 8)
     }
 
     private var statsOverlay: some View {
@@ -47,7 +103,20 @@ struct GameViewportView: View {
 
     var body: some View {
         ZStack {
-            EditorMetalView(viewportID: 1, state: state)
+            Color(white: 0.05)
+
+            GeometryReader { geo in
+                let targetAspect = CGFloat(state.renderTargetConfig.aspectRatio)
+                let viewAspect = geo.size.width / max(geo.size.height, 1)
+                let pillarbox = viewAspect > targetAspect
+                let renderW = pillarbox ? geo.size.height * targetAspect : geo.size.width
+                let renderH = pillarbox ? geo.size.height : geo.size.width / targetAspect
+
+                EditorMetalView(viewportID: 1, state: state)
+                    .frame(width: renderW, height: renderH)
+                    .frame(width: geo.size.width, height: geo.size.height)
+            }
+
             VStack {
                 HStack {
                     renderTargetSelector
@@ -58,7 +127,6 @@ struct GameViewportView: View {
             }
             .padding(8)
         }
-        .background(Color.black)
     }
 
     private var statsOverlay: some View {
@@ -283,6 +351,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     // Per-material rendering
     var materialPipelineCache: PipelineCache?
     var skyboxFallbackPipeline: MTLRenderPipelineState?
+    var hdrSkyboxFallbackPipeline: MTLRenderPipelineState?
     var customSkyboxTexture: MTLTexture?
     var cachedSkyboxPath: String?
     var skyboxDepthStencilState: MTLDepthStencilState?
@@ -290,6 +359,13 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     // Post-processing (Game Viewport only)
     var postProcessStack: PostProcessStack?
     var hdrRenderedPipeline: MTLRenderPipelineState?
+
+    // Object ID picking & outline (Scene Editor only)
+    var objectIDTexture: MTLTexture?
+    var objectIDDepthTexture: MTLTexture?
+    var objectIDPipeline: MTLRenderPipelineState?
+    var outlineCompositePipeline: MTLRenderPipelineState?
+    var outlineNoDepthState: MTLDepthStencilState?
 
     var lastMouseLocation: NSPoint?
     var mouseDownPoint: NSPoint?
@@ -341,6 +417,12 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 colorFormat: .bgra8Unorm_srgb,
                 depthFormat: .depth32Float
             )
+            hdrSkyboxFallbackPipeline = MaterialRegistry.shared.compileSkyboxFallback(
+                device: device,
+                vertexDescriptor: vd,
+                colorFormat: .rgba16Float,
+                depthFormat: .depth32Float
+            )
         }
 
         if viewportID == 0 {
@@ -371,6 +453,44 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 depthFormat: .depth32Float,
                 vertexDescriptor: MeshPool.metalVertexDescriptor
             )
+
+            // Object ID pipeline (r32Uint render target for GPU picking)
+            if let idLib = try? shaderCompiler?.compile(source: ShaderSnippets.entityIDShader),
+               let idVert = idLib.makeFunction(name: "vertex_main"),
+               let idFrag = idLib.makeFunction(name: "fragment_main") {
+                let idDesc = MTLRenderPipelineDescriptor()
+                idDesc.vertexFunction = idVert
+                idDesc.fragmentFunction = idFrag
+                idDesc.colorAttachments[0].pixelFormat = .r32Uint
+                idDesc.depthAttachmentPixelFormat = .depth32Float
+                if let vd = MeshPool.metalVertexDescriptor {
+                    idDesc.vertexDescriptor = vd
+                }
+                objectIDPipeline = try? device.makeRenderPipelineState(descriptor: idDesc)
+            }
+
+            // Outline composite pipeline (fullscreen, alpha-blended)
+            if let olLib = try? shaderCompiler?.compile(source: ShaderSnippets.outlineCompositeShader),
+               let olVert = olLib.makeFunction(name: "vertex_main"),
+               let olFrag = olLib.makeFunction(name: "fragment_main") {
+                let olDesc = MTLRenderPipelineDescriptor()
+                olDesc.vertexFunction = olVert
+                olDesc.fragmentFunction = olFrag
+                olDesc.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+                olDesc.colorAttachments[0].isBlendingEnabled = true
+                olDesc.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+                olDesc.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+                olDesc.colorAttachments[0].sourceAlphaBlendFactor = .one
+                olDesc.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                olDesc.depthAttachmentPixelFormat = .depth32Float
+                outlineCompositePipeline = try? device.makeRenderPipelineState(descriptor: olDesc)
+            }
+
+            // Depth state that disables depth for fullscreen passes
+            let noDepthDesc = MTLDepthStencilDescriptor()
+            noDepthDesc.depthCompareFunction = .always
+            noDepthDesc.isDepthWriteEnabled = false
+            outlineNoDepthState = device.makeDepthStencilState(descriptor: noDepthDesc)
         } else {
             let config = DataFlowConfig()
             let header = ShaderSnippets.generateSharedHeader(config: config)
@@ -621,82 +741,60 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         }
     }
 
-    // MARK: - Picking
+    // MARK: - Object ID Texture Management
 
-    func performPick(at point: CGPoint, viewSize: CGSize) {
-        guard viewportID == 0 else { return }
+    private func ensureObjectIDTextures(width: Int, height: Int, device: MTLDevice) {
+        guard width > 0 && height > 0 else { return }
+        if objectIDTexture?.width == width && objectIDTexture?.height == height { return }
 
-        let yaw = state.cameraOrbitYaw
-        let pitch = state.cameraOrbitPitch
-        let dist = state.cameraOrbitDistance
-        let target = state.cameraOrbitTarget
-        let eye = target + SIMD3<Float>(
-            dist * cos(pitch) * sin(yaw),
-            dist * sin(pitch),
-            dist * cos(pitch) * cos(yaw)
-        )
-        let viewMatrix = matrix4x4LookAt(eye: eye, target: target, up: SIMD3<Float>(0, 1, 0))
-        let aspect = Float(viewSize.width / viewSize.height)
+        let idDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r32Uint, width: width, height: height, mipmapped: false)
+        idDesc.usage = [.renderTarget, .shaderRead]
+        idDesc.storageMode = .managed
+        objectIDTexture = device.makeTexture(descriptor: idDesc)
+        objectIDTexture?.label = "ObjectID"
 
-        let projMatrix: simd_float4x4
-        if state.isOrthographic {
-            let halfH = state.orthoSize * 0.5
-            let halfW = halfH * aspect
-            projMatrix = matrix4x4Orthographic(
-                left: -halfW, right: halfW,
-                bottom: -halfH, top: halfH,
-                nearZ: 0.1, farZ: 1000.0
-            )
-        } else {
-            projMatrix = matrix4x4PerspectiveRightHand(
-                fovyRadians: Float.pi / 3.0,
-                aspectRatio: aspect,
-                nearZ: 0.1,
-                farZ: 1000.0
-            )
-        }
-
-        let ndcX = Float(point.x / viewSize.width) * 2.0 - 1.0
-        let ndcY = Float(point.y / viewSize.height) * 2.0 - 1.0
-
-        let invVP = (projMatrix * viewMatrix).inverse
-        var nearClip = invVP * SIMD4<Float>(ndcX, ndcY, 0, 1)
-        nearClip /= nearClip.w
-        var farClip = invVP * SIMD4<Float>(ndcX, ndcY, 1, 1)
-        farClip /= farClip.w
-
-        let rayOrigin = SIMD3<Float>(nearClip.x, nearClip.y, nearClip.z)
-        let rayDir = normalize(SIMD3<Float>(farClip.x, farClip.y, farClip.z) - rayOrigin)
-
-        var closestT: Float = .infinity
-        var closestEntity: Entity?
-
-        for drawCall in state.meshRenderSystem.drawCalls {
-            let worldMatrix = drawCall.worldMatrix
-            let center = SIMD3<Float>(worldMatrix.columns.3.x, worldMatrix.columns.3.y, worldMatrix.columns.3.z)
-            let scaleX = length(SIMD3<Float>(worldMatrix.columns.0.x, worldMatrix.columns.0.y, worldMatrix.columns.0.z))
-            let scaleY = length(SIMD3<Float>(worldMatrix.columns.1.x, worldMatrix.columns.1.y, worldMatrix.columns.1.z))
-            let scaleZ = length(SIMD3<Float>(worldMatrix.columns.2.x, worldMatrix.columns.2.y, worldMatrix.columns.2.z))
-            let radius = max(scaleX, max(scaleY, scaleZ))
-
-            if let t = raySphereIntersect(origin: rayOrigin, direction: rayDir, center: center, radius: radius), t < closestT {
-                closestT = t
-                closestEntity = drawCall.entity
-            }
-        }
-
-        state.selectedEntity = closestEntity
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: width, height: height, mipmapped: false)
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+        objectIDDepthTexture = device.makeTexture(descriptor: depthDesc)
+        objectIDDepthTexture?.label = "ObjectID Depth"
     }
 
-    private func raySphereIntersect(origin: SIMD3<Float>, direction: SIMD3<Float>, center: SIMD3<Float>, radius: Float) -> Float? {
-        let oc = origin - center
-        let a = dot(direction, direction)
-        let b = 2.0 * dot(oc, direction)
-        let c = dot(oc, oc) - radius * radius
-        let disc = b * b - 4.0 * a * c
-        guard disc >= 0 else { return nil }
-        let t = (-b - sqrt(disc)) / (2.0 * a)
-        return t > 0 ? t : nil
+    // MARK: - GPU Picking
+
+    func performPick(at point: CGPoint, viewSize: CGSize) {
+        guard viewportID == 0, let idTex = objectIDTexture else {
+            state.selectedEntity = nil
+            return
+        }
+
+        let scaleX = CGFloat(idTex.width) / viewSize.width
+        let scaleY = CGFloat(idTex.height) / viewSize.height
+        let px = Int(point.x * scaleX)
+        let py = min(idTex.height - 1, max(0, idTex.height - 1 - Int(point.y * scaleY)))
+
+        guard px >= 0 && px < idTex.width && py >= 0 && py < idTex.height else {
+            state.selectedEntity = nil
+            return
+        }
+
+        var pixelValue: UInt32 = 0
+        idTex.getBytes(
+            &pixelValue,
+            bytesPerRow: MemoryLayout<UInt32>.stride * idTex.width,
+            from: MTLRegion(
+                origin: MTLOrigin(x: px, y: py, z: 0),
+                size: MTLSize(width: 1, height: 1, depth: 1)),
+            mipmapLevel: 0)
+
+        if pixelValue > 0 {
+            let entity = Entity(id: UInt64(pixelValue - 1))
+            state.selectedEntity = state.engine.world.isAlive(entity) ? entity : nil
+        } else {
+            state.selectedEntity = nil
+        }
     }
 
     // MARK: - Camera Math Helpers
@@ -888,49 +986,85 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         // Determine whether Game Viewport uses post-processing
         let camSys = state.cameraSystem
+        let hasVolumePostProcess = state.postProcessVolumeSystem.hasActiveVolume
         let usePostProcess = viewportID == 1
             && camSys.allowPostProcessing
-            && camSys.usePhysicalProperties
+            && (camSys.usePhysicalProperties || hasVolumePostProcess)
             && postProcessStack != nil
             && hdrRenderedPipeline != nil
 
-        let (yaw, pitch, dist, target): (Float, Float, Float, SIMD3<Float>)
-        if viewportID == 0 {
-            yaw = state.cameraOrbitYaw
-            pitch = state.cameraOrbitPitch
-            dist = state.cameraOrbitDistance
-            target = state.cameraOrbitTarget
-        } else {
-            yaw = state.camera2OrbitYaw
-            pitch = state.camera2OrbitPitch
-            dist = state.camera2OrbitDistance
-            target = state.camera2OrbitTarget
-        }
-
-        let eye = target + SIMD3<Float>(
-            dist * cos(pitch) * sin(yaw),
-            dist * sin(pitch),
-            dist * cos(pitch) * cos(yaw)
-        )
-        let viewMatrix = matrix4x4LookAt(eye: eye, target: target, up: SIMD3<Float>(0, 1, 0))
+        let viewMatrix: simd_float4x4
+        let projMatrix: simd_float4x4
+        let eye: SIMD3<Float>
         let aspect = Float(view.drawableSize.width / view.drawableSize.height)
 
-        let projMatrix: simd_float4x4
-        if viewportID == 0 && state.isOrthographic {
-            let halfH = state.orthoSize * 0.5
-            let halfW = halfH * aspect
-            projMatrix = matrix4x4Orthographic(
-                left: -halfW, right: halfW,
-                bottom: -halfH, top: halfH,
-                nearZ: 0.1, farZ: 1000.0
-            )
+        if viewportID == 1,
+           let camEntity = state.resolvedOutputCamera,
+           let tc = state.engine.world.getComponent(TransformComponent.self, from: camEntity),
+           let cam = state.engine.world.getComponent(CameraComponent.self, from: camEntity) {
+            let wm = tc.worldMatrix
+            eye = SIMD3<Float>(wm.columns.3.x, wm.columns.3.y, wm.columns.3.z)
+            let forward = -SIMD3<Float>(wm.columns.2.x, wm.columns.2.y, wm.columns.2.z)
+            let up = SIMD3<Float>(wm.columns.1.x, wm.columns.1.y, wm.columns.1.z)
+            viewMatrix = matrix4x4LookAt(eye: eye, target: eye + forward, up: up)
+
+            switch cam.projection {
+            case .perspective:
+                projMatrix = matrix4x4PerspectiveRightHand(
+                    fovyRadians: cam.effectiveFOV,
+                    aspectRatio: aspect,
+                    nearZ: cam.nearZ,
+                    farZ: cam.farZ
+                )
+            case .orthographic:
+                let halfH = cam.orthoSize
+                let halfW = halfH * aspect
+                projMatrix = matrix4x4Orthographic(
+                    left: -halfW, right: halfW,
+                    bottom: -halfH, top: halfH,
+                    nearZ: cam.nearZ, farZ: cam.farZ
+                )
+            }
         } else {
-            projMatrix = matrix4x4PerspectiveRightHand(
-                fovyRadians: Float.pi / 3.0,
-                aspectRatio: aspect,
-                nearZ: 0.1,
-                farZ: 1000.0
+            let yaw: Float
+            let pitch: Float
+            let dist: Float
+            let target: SIMD3<Float>
+            if viewportID == 0 {
+                yaw = state.cameraOrbitYaw
+                pitch = state.cameraOrbitPitch
+                dist = state.cameraOrbitDistance
+                target = state.cameraOrbitTarget
+            } else {
+                yaw = state.camera2OrbitYaw
+                pitch = state.camera2OrbitPitch
+                dist = state.camera2OrbitDistance
+                target = state.camera2OrbitTarget
+            }
+
+            eye = target + SIMD3<Float>(
+                dist * cos(pitch) * sin(yaw),
+                dist * sin(pitch),
+                dist * cos(pitch) * cos(yaw)
             )
+            viewMatrix = matrix4x4LookAt(eye: eye, target: target, up: SIMD3<Float>(0, 1, 0))
+
+            if viewportID == 0 && state.isOrthographic {
+                let halfH = state.orthoSize * 0.5
+                let halfW = halfH * aspect
+                projMatrix = matrix4x4Orthographic(
+                    left: -halfW, right: halfW,
+                    bottom: -halfH, top: halfH,
+                    nearZ: 0.1, farZ: 1000.0
+                )
+            } else {
+                projMatrix = matrix4x4PerspectiveRightHand(
+                    fovyRadians: Float.pi / 3.0,
+                    aspectRatio: aspect,
+                    nearZ: 0.1,
+                    farZ: 1000.0
+                )
+            }
         }
 
         if viewportID == 0 {
@@ -960,6 +1094,56 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         guard let pipeline = activePipeline else { return }
 
+        // Object ID pass (Scene Editor only — for GPU picking and post-process outline)
+        if viewportID == 0, let idPSO = objectIDPipeline, let dev = metalDevice?.device {
+            let w = Int(view.drawableSize.width)
+            let h = Int(view.drawableSize.height)
+            ensureObjectIDTextures(width: w, height: h, device: dev)
+
+            if let idTex = objectIDTexture, let idDepth = objectIDDepthTexture {
+                let idRPD = MTLRenderPassDescriptor()
+                idRPD.colorAttachments[0].texture = idTex
+                idRPD.colorAttachments[0].loadAction = .clear
+                idRPD.colorAttachments[0].storeAction = .store
+                idRPD.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                idRPD.depthAttachment.texture = idDepth
+                idRPD.depthAttachment.loadAction = .clear
+                idRPD.depthAttachment.storeAction = .dontCare
+                idRPD.depthAttachment.clearDepth = 1.0
+
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: idRPD) {
+                    enc.setFrontFacing(.counterClockwise)
+                    enc.setDepthStencilState(device.depthStencilState)
+                    enc.setRenderPipelineState(idPSO)
+
+                    for drawCall in state.meshRenderSystem.drawCalls {
+                        let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
+                        var uniforms = Uniforms(
+                            mvpMatrix: mvp,
+                            modelMatrix: drawCall.worldMatrix,
+                            normalMatrix: drawCall.normalMatrix,
+                            cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
+                            time: state.engine.totalTime
+                        )
+                        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                        var entityID = UInt32(truncatingIfNeeded: drawCall.entity.id &+ 1)
+                        enc.setFragmentBytes(&entityID, length: MemoryLayout<UInt32>.stride, index: 6)
+                        enc.setCullMode(drawCall.material.renderState.cullMode.metalCullMode)
+
+                        if let mesh = pool.mesh(for: drawCall.meshType) {
+                            MeshRenderer.draw(mesh: mesh, with: enc)
+                        }
+                    }
+                    enc.endEncoding()
+                }
+
+                if let blit = commandBuffer.makeBlitCommandEncoder() {
+                    blit.synchronize(resource: idTex)
+                    blit.endEncoding()
+                }
+            }
+        }
+
         // Build the render pass descriptor
         let rpd: MTLRenderPassDescriptor
         if usePostProcess, let ppStack = postProcessStack {
@@ -987,7 +1171,8 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
             // Skybox pass (before opaque geometry)
             drawSkybox(encoder: encoder, device: device, pool: pool,
-                       viewMatrix: viewMatrix, projMatrix: projMatrix)
+                       viewMatrix: viewMatrix, projMatrix: projMatrix,
+                       useHDR: usePostProcess)
 
             encoder.setDepthStencilState(device.depthStencilState)
 
@@ -1014,7 +1199,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
 
                 if usePerMaterial {
-                    if let materialPSO = resolveMaterialPipeline(for: drawCall.material, device: device) {
+                    if let materialPSO = resolveMaterialPipeline(for: drawCall.material, device: device, useHDR: usePostProcess) {
                         encoder.setRenderPipelineState(materialPSO)
 
                         let rs = drawCall.material.renderState
@@ -1091,28 +1276,19 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             }
 
             if viewportID == 0, let selected = state.selectedEntity, let dev = metalDevice?.device {
-                if let mc = state.engine.world.getComponent(MeshComponent.self, from: selected),
-                   let tc = state.engine.world.getComponent(TransformComponent.self, from: selected),
-                   let outlinePSO = outlinePipeline {
-                    let outlineScale: Float = 1.03
-                    let scaleMatrix = matrix4x4Scale(SIMD3<Float>(repeating: outlineScale))
-                    let outlineWorld = tc.worldMatrix * scaleMatrix
-                    let outlineMVP = projMatrix * viewMatrix * outlineWorld
-                    let outlineNormal = simd_transpose(simd_inverse(outlineWorld))
-                    var outlineUniforms = Uniforms(
-                        mvpMatrix: outlineMVP,
-                        modelMatrix: outlineWorld,
-                        normalMatrix: outlineNormal,
-                        cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
-                        time: state.engine.totalTime
-                    )
-                    encoder.setRenderPipelineState(outlinePSO)
+                // Post-process outline from Object ID texture
+                if let olPSO = outlineCompositePipeline,
+                   let idTex = objectIDTexture,
+                   let noDepth = outlineNoDepthState {
+                    encoder.setRenderPipelineState(olPSO)
+                    encoder.setDepthStencilState(noDepth)
+                    encoder.setCullMode(.none)
                     encoder.setTriangleFillMode(.fill)
-                    encoder.setCullMode(.front)
-                    encoder.setVertexBytes(&outlineUniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                    if let mesh = pool.mesh(for: mc.meshType) {
-                        MeshRenderer.draw(mesh: mesh, with: encoder)
-                    }
+                    var selectedID = UInt32(truncatingIfNeeded: selected.id &+ 1)
+                    encoder.setFragmentBytes(&selectedID, length: MemoryLayout<UInt32>.stride, index: 0)
+                    encoder.setFragmentTexture(idTex, index: 0)
+                    MeshRenderer.drawFullscreenTriangle(with: encoder)
+                    encoder.setDepthStencilState(device.depthStencilState)
                     encoder.setCullMode(.back)
                 }
 
@@ -1140,7 +1316,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                         tc.worldMatrix.columns.3.y,
                         tc.worldMatrix.columns.3.z
                     )
-                    let gizmoScale = dist * 0.18
+                    let gizmoScale = state.cameraOrbitDistance * 0.18
                     let vpMatrix = projMatrix * viewMatrix
                     let gizmoMode: GizmoRenderer.Mode
                     switch state.sceneToolMode {
@@ -1168,38 +1344,256 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             let screenW = Float(view.drawableSize.width)
             let screenH = Float(view.drawableSize.height)
 
-            let ppUniforms = PostProcessUniforms(
-                exposureMultiplier: camSys.exposureMultiplier,
-                focusDistance: camSys.focusDistance,
-                aperture: camSys.apertureValue,
-                focalLengthM: camSys.focalLengthMM * 0.001,
-                sensorHeightM: camSys.sensorHeightMM * 0.001,
-                shutterAngle: camSys.shutterAngleValue,
-                nearZ: camSys.nearZ,
-                farZ: camSys.farZ,
-                screenWidth: screenW,
-                screenHeight: screenH
-            )
+            let ppVolSys = state.postProcessVolumeSystem
+            if ppVolSys.hasActiveVolume {
+                let vol = ppVolSys.resolvedSettings
+                var settings = VolumePostProcessSettings()
 
-            let vpMatrix = projMatrix * viewMatrix
-            let mbUniforms = MotionBlurUniforms(
-                viewProjectionMatrix: vpMatrix,
-                previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
-                inverseViewProjectionMatrix: vpMatrix.inverse,
-                shutterAngle: camSys.shutterAngleValue,
-                screenWidth: screenW,
-                screenHeight: screenH
-            )
+                settings.enableBloom = vol.bloom.enabled
+                if settings.enableBloom {
+                    settings.bloomUniforms = BloomUniforms(
+                        threshold: vol.bloom.threshold, intensity: vol.bloom.intensity,
+                        scatter: vol.bloom.scatter,
+                        tintR: vol.bloom.tint.x, tintG: vol.bloom.tint.y, tintB: vol.bloom.tint.z,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
 
-            ppStack.execute(
-                commandBuffer: commandBuffer,
-                drawableTexture: drawable.texture,
-                ppUniforms: ppUniforms,
-                mbUniforms: mbUniforms,
-                enableDoF: true,
-                enableExposure: true,
-                enableMotionBlur: true
-            )
+                settings.enableDoF = vol.depthOfField.enabled
+                if settings.enableDoF {
+                    settings.ppUniforms = PostProcessUniforms(
+                        exposureMultiplier: camSys.exposureMultiplier,
+                        focusDistance: vol.depthOfField.focusDistance,
+                        aperture: vol.depthOfField.aperture,
+                        focalLengthM: vol.depthOfField.focalLength * 0.001,
+                        sensorHeightM: camSys.sensorHeightMM * 0.001,
+                        shutterAngle: camSys.shutterAngleValue,
+                        nearZ: camSys.nearZ, farZ: camSys.farZ,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
+
+                let vpMatrix = projMatrix * viewMatrix
+                settings.enableMotionBlur = vol.motionBlur.enabled
+                if settings.enableMotionBlur {
+                    settings.mbUniforms = MotionBlurUniforms(
+                        viewProjectionMatrix: vpMatrix,
+                        previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
+                        inverseViewProjectionMatrix: vpMatrix.inverse,
+                        shutterAngle: camSys.shutterAngleValue * vol.motionBlur.intensity,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
+
+                settings.enablePanini = vol.paniniProjection.enabled
+                if settings.enablePanini {
+                    settings.paniniUniforms = PaniniUniforms(
+                        distance: vol.paniniProjection.distance,
+                        cropToFit: vol.paniniProjection.cropToFit,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
+
+                let needsColorGrading = vol.colorAdjustments.enabled || vol.whiteBalance.enabled
+                    || vol.channelMixer.enabled || vol.liftGammaGain.enabled
+                    || vol.splitToning.enabled || vol.shadowsMidtonesHighlights.enabled
+                    || vol.tonemapping.enabled
+                settings.enableColorGrading = needsColorGrading
+                if needsColorGrading {
+                    var cg = ColorGradingUniforms()
+                    if vol.colorAdjustments.enabled {
+                        cg.enableColorAdjustments = 1
+                        cg.postExposure = vol.colorAdjustments.postExposure
+                        cg.contrast = vol.colorAdjustments.contrast
+                        cg.colorFilterR = vol.colorAdjustments.colorFilter.x
+                        cg.colorFilterG = vol.colorAdjustments.colorFilter.y
+                        cg.colorFilterB = vol.colorAdjustments.colorFilter.z
+                        cg.hueShift = vol.colorAdjustments.hueShift
+                        cg.saturation = vol.colorAdjustments.saturation
+                    }
+                    if vol.whiteBalance.enabled {
+                        cg.enableWhiteBalance = 1
+                        cg.temperature = vol.whiteBalance.temperature
+                        cg.wbTint = vol.whiteBalance.tint
+                    }
+                    if vol.channelMixer.enabled {
+                        cg.enableChannelMixer = 1
+                        cg.mixerRedR = vol.channelMixer.redOutRed
+                        cg.mixerRedG = vol.channelMixer.redOutGreen
+                        cg.mixerRedB = vol.channelMixer.redOutBlue
+                        cg.mixerGreenR = vol.channelMixer.greenOutRed
+                        cg.mixerGreenG = vol.channelMixer.greenOutGreen
+                        cg.mixerGreenB = vol.channelMixer.greenOutBlue
+                        cg.mixerBlueR = vol.channelMixer.blueOutRed
+                        cg.mixerBlueG = vol.channelMixer.blueOutGreen
+                        cg.mixerBlueB = vol.channelMixer.blueOutBlue
+                    }
+                    if vol.liftGammaGain.enabled {
+                        cg.enableLGG = 1
+                        cg.lift = vol.liftGammaGain.lift
+                        cg.gamma = vol.liftGammaGain.gamma
+                        cg.gain = vol.liftGammaGain.gain
+                    }
+                    if vol.splitToning.enabled {
+                        cg.enableSplitToning = 1
+                        cg.splitShadowR = vol.splitToning.shadowsTint.x
+                        cg.splitShadowG = vol.splitToning.shadowsTint.y
+                        cg.splitShadowB = vol.splitToning.shadowsTint.z
+                        cg.splitHighR = vol.splitToning.highlightsTint.x
+                        cg.splitHighG = vol.splitToning.highlightsTint.y
+                        cg.splitHighB = vol.splitToning.highlightsTint.z
+                        cg.splitBalance = vol.splitToning.balance
+                    }
+                    if vol.shadowsMidtonesHighlights.enabled {
+                        cg.enableSMH = 1
+                        cg.smhShadows = vol.shadowsMidtonesHighlights.shadows
+                        cg.smhMidtones = vol.shadowsMidtonesHighlights.midtones
+                        cg.smhHighlights = vol.shadowsMidtonesHighlights.highlights
+                        cg.smhShadowsStart = vol.shadowsMidtonesHighlights.shadowsStart
+                        cg.smhShadowsEnd = vol.shadowsMidtonesHighlights.shadowsEnd
+                        cg.smhHighlightsStart = vol.shadowsMidtonesHighlights.highlightsStart
+                        cg.smhHighlightsEnd = vol.shadowsMidtonesHighlights.highlightsEnd
+                    }
+                    if vol.tonemapping.enabled {
+                        switch vol.tonemapping.mode {
+                        case .none: cg.tonemappingMode = 0
+                        case .neutral: cg.tonemappingMode = 1
+                        case .aces: cg.tonemappingMode = 2
+                        }
+                    }
+                    settings.colorGradingUniforms = cg
+                }
+
+                settings.enableChromaticAberration = vol.chromaticAberration.enabled
+                if settings.enableChromaticAberration {
+                    settings.chromaticAberrationUniforms = ChromaticAberrationUniforms(
+                        intensity: vol.chromaticAberration.intensity,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
+
+                settings.enableLensDistortion = vol.lensDistortion.enabled
+                if settings.enableLensDistortion {
+                    settings.lensDistortionUniforms = LensDistortionUniforms(
+                        intensity: vol.lensDistortion.intensity,
+                        xMultiplier: vol.lensDistortion.xMultiplier,
+                        yMultiplier: vol.lensDistortion.yMultiplier,
+                        scale: vol.lensDistortion.scale,
+                        centerX: vol.lensDistortion.center.x,
+                        centerY: vol.lensDistortion.center.y,
+                        screenWidth: screenW, screenHeight: screenH)
+                }
+
+                settings.enableVignette = vol.vignette.enabled
+                if settings.enableVignette {
+                    var vu = VignetteUniforms()
+                    vu.colorR = vol.vignette.color.x
+                    vu.colorG = vol.vignette.color.y
+                    vu.colorB = vol.vignette.color.z
+                    vu.intensity = vol.vignette.intensity
+                    vu.centerX = vol.vignette.center.x
+                    vu.centerY = vol.vignette.center.y
+                    vu.smoothness = vol.vignette.smoothness
+                    vu.rounded = vol.vignette.rounded ? 1 : 0
+                    vu.screenWidth = screenW
+                    vu.screenHeight = screenH
+                    settings.vignetteUniforms = vu
+                }
+
+                settings.enableFilmGrain = vol.filmGrain.enabled
+                if settings.enableFilmGrain {
+                    var fg = FilmGrainUniforms()
+                    fg.intensity = vol.filmGrain.intensity
+                    fg.response = vol.filmGrain.response
+                    switch vol.filmGrain.type {
+                    case .thin: fg.grainType = 0
+                    case .medium: fg.grainType = 1
+                    case .large: fg.grainType = 2
+                    }
+                    fg.time = state.engine.totalTime
+                    fg.screenWidth = screenW
+                    fg.screenHeight = screenH
+                    settings.filmGrainUniforms = fg
+                }
+
+                settings.enableSSAO = vol.ambientOcclusion.enabled
+                if settings.enableSSAO {
+                    var su = SSAOUniforms()
+                    su.intensity = vol.ambientOcclusion.intensity
+                    su.radius = vol.ambientOcclusion.radius
+                    su.sampleCount = Float(vol.ambientOcclusion.sampleCount)
+                    su.screenWidth = screenW; su.screenHeight = screenH
+                    su.nearZ = camSys.nearZ; su.farZ = camSys.farZ
+                    settings.ssaoUniforms = su
+                }
+
+                settings.enableFXAA = vol.antiAliasing.enabled && vol.antiAliasing.mode == .fxaa
+                if settings.enableFXAA {
+                    settings.fxaaUniforms = FXAAUniforms(screenWidth: screenW, screenHeight: screenH)
+                }
+
+                settings.enableFullscreenBlur = vol.fullscreenBlur.enabled
+                if settings.enableFullscreenBlur {
+                    var bu = FullscreenBlurUniforms()
+                    bu.intensity = vol.fullscreenBlur.intensity
+                    bu.radius = vol.fullscreenBlur.radius
+                    bu.blurMode = vol.fullscreenBlur.mode == .highQuality ? 0 : 1
+                    bu.screenWidth = screenW; bu.screenHeight = screenH
+                    settings.fullscreenBlurUniforms = bu
+                }
+
+                settings.enableFullscreenOutline = vol.fullscreenOutline.enabled
+                if settings.enableFullscreenOutline {
+                    var ou = FullscreenOutlineUniforms()
+                    switch vol.fullscreenOutline.mode {
+                    case .normalBased: ou.outlineMode = 0
+                    case .colorBased: ou.outlineMode = 1
+                    case .depthBased: ou.outlineMode = 2
+                    }
+                    ou.thickness = vol.fullscreenOutline.thickness
+                    ou.threshold = vol.fullscreenOutline.threshold
+                    ou.colorR = vol.fullscreenOutline.color.x
+                    ou.colorG = vol.fullscreenOutline.color.y
+                    ou.colorB = vol.fullscreenOutline.color.z
+                    ou.screenWidth = screenW; ou.screenHeight = screenH
+                    ou.nearZ = camSys.nearZ; ou.farZ = camSys.farZ
+                    settings.fullscreenOutlineUniforms = ou
+                }
+
+                ppStack.executeVolume(
+                    commandBuffer: commandBuffer,
+                    drawableTexture: drawable.texture,
+                    settings: settings
+                )
+            } else {
+                let ppUniforms = PostProcessUniforms(
+                    exposureMultiplier: camSys.exposureMultiplier,
+                    focusDistance: camSys.focusDistance,
+                    aperture: camSys.apertureValue,
+                    focalLengthM: camSys.focalLengthMM * 0.001,
+                    sensorHeightM: camSys.sensorHeightMM * 0.001,
+                    shutterAngle: camSys.shutterAngleValue,
+                    nearZ: camSys.nearZ,
+                    farZ: camSys.farZ,
+                    screenWidth: screenW,
+                    screenHeight: screenH
+                )
+
+                let vpMatrix = projMatrix * viewMatrix
+                let mbUniforms = MotionBlurUniforms(
+                    viewProjectionMatrix: vpMatrix,
+                    previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
+                    inverseViewProjectionMatrix: vpMatrix.inverse,
+                    shutterAngle: camSys.shutterAngleValue,
+                    screenWidth: screenW,
+                    screenHeight: screenH
+                )
+
+                ppStack.execute(
+                    commandBuffer: commandBuffer,
+                    drawableTexture: drawable.texture,
+                    ppUniforms: ppUniforms,
+                    mbUniforms: mbUniforms,
+                    enableDoF: true,
+                    enableExposure: true,
+                    enableMotionBlur: true
+                )
+            }
         }
 
         commandBuffer.present(drawable)
@@ -1210,10 +1604,14 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
     private func resolveMaterialPipeline(
         for material: MCMaterial,
-        device: MCMetalDevice
+        device: MCMetalDevice,
+        useHDR: Bool = false
     ) -> MTLRenderPipelineState? {
-        if MaterialRegistry.shared.isBuiltin(material.id) {
-            return MaterialRegistry.shared.pipelineState(for: material.id)
+        let colorFormat: MTLPixelFormat = useHDR ? .rgba16Float : .bgra8Unorm_srgb
+        let registry = MaterialRegistry.shared
+
+        if registry.isBuiltin(material.id) {
+            return useHDR ? registry.hdrPipelineState(for: material.id) : registry.pipelineState(for: material.id)
         }
 
         if let ref = material.shaderReference, ref.hasPrefix("builtin/") {
@@ -1223,15 +1621,17 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             case "builtin/toon":  builtinID = MaterialRegistry.toonMaterialID
             default:              builtinID = MaterialRegistry.litMaterialID
             }
-            return MaterialRegistry.shared.pipelineState(for: builtinID)
+            return useHDR ? registry.hdrPipelineState(for: builtinID) : registry.pipelineState(for: builtinID)
         }
 
+        let cacheKey = material.pipelineCacheKey.withHDR(useHDR)
+
         if let unified = material.unifiedShaderSource {
-            return try? materialPipelineCache?.getOrCompile(materialKey: material.pipelineCacheKey) {
+            return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
                 try shaderCompiler!.compileUnifiedPipeline(
                     source: unified,
                     renderState: material.renderState,
-                    colorFormat: .bgra8Unorm_srgb,
+                    colorFormat: colorFormat,
                     depthFormat: .depth32Float,
                     vertexDescriptor: MeshPool.metalVertexDescriptor
                 )
@@ -1246,11 +1646,11 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             ?? ShaderSnippets.generateDefaultVertexShader(config: config))
         let fragmentSource = header + material.fragmentShaderSource
 
-        return try? materialPipelineCache?.getOrCompile(materialKey: material.pipelineCacheKey) {
+        return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
             try shaderCompiler!.compilePipeline(
                 vertexSource: vertexSource,
                 fragmentSource: fragmentSource,
-                colorFormat: .bgra8Unorm_srgb,
+                colorFormat: colorFormat,
                 depthFormat: .depth32Float,
                 vertexDescriptor: MeshPool.metalVertexDescriptor
             )
@@ -1264,7 +1664,8 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         device: MCMetalDevice,
         pool: MeshPool,
         viewMatrix: simd_float4x4,
-        projMatrix: simd_float4x4
+        projMatrix: simd_float4x4,
+        useHDR: Bool = false
     ) {
         let skyboxSystem = state.skyboxSystem
         guard skyboxSystem.isActive else { return }
@@ -1274,10 +1675,18 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         // Resolve HDRI texture: scene-specific override > engine default
         let hdriTexture: MTLTexture? = resolveHDRITexture(device: device)
 
-        let hdriPipeline = MaterialRegistry.shared.pipelineState(for: MaterialRegistry.skyboxMaterialID)
+        let registry = MaterialRegistry.shared
         let skyboxPSO: MTLRenderPipelineState
-        if hdriTexture != nil, let hPSO = hdriPipeline {
-            skyboxPSO = hPSO
+        if hdriTexture != nil {
+            if useHDR, let hdrPSO = registry.hdrPipelineState(for: MaterialRegistry.skyboxMaterialID) {
+                skyboxPSO = hdrPSO
+            } else if let sdrPSO = registry.pipelineState(for: MaterialRegistry.skyboxMaterialID) {
+                skyboxPSO = sdrPSO
+            } else {
+                return
+            }
+        } else if useHDR, let hdrFallback = hdrSkyboxFallbackPipeline {
+            skyboxPSO = hdrFallback
         } else if let fallback = skyboxFallbackPipeline {
             skyboxPSO = fallback
         } else {

@@ -129,5 +129,19 @@ public enum SceneAgentPrompt {
                 ToolParameter(name: "path", type: .string, description: "Output file path for the USDA file"),
             ]
         ),
+        AgentToolDefinition(
+            name: "createScript",
+            description: "Creates a new gameplay Swift script with a Component + System template in the Gameplay folder.",
+            parameters: [
+                ToolParameter(name: "name", type: .string, description: "Base name for the script (e.g. 'PlayerMovement')"),
+            ]
+        ),
+        AgentToolDefinition(
+            name: "createPromptScript",
+            description: "Creates a new .prompt natural-language script file. The user fills in the template and the engine compiles it to Swift via AI.",
+            parameters: [
+                ToolParameter(name: "name", type: .string, description: "Name for the prompt script (e.g. 'Patrol Guard')"),
+            ]
+        ),
     ]
 }
