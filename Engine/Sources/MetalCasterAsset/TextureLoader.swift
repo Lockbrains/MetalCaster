@@ -111,21 +111,11 @@ public final class TextureLoader {
         return device.makeTexture(descriptor: descriptor)
     }
 
-    public func compressTexture(source: MTLTexture, to format: CompressedFormat, quality: CompressionQuality = .normal) throws -> MTLTexture {
-        let targetFormat = format.mtlPixelFormat
-        guard source.pixelFormat == targetFormat else {
+    /// Copies mip levels between textures of the same pixel format via blit encoder.
+    /// For actual format conversion (e.g. RGBA8 -> ASTC), use `TextureCompressor`.
+    public func blitCopy(source: MTLTexture, destination: MTLTexture) throws {
+        guard source.pixelFormat == destination.pixelFormat else {
             throw TextureError.compressionRequiresFormatConversion
-        }
-
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: targetFormat,
-            width: source.width,
-            height: source.height,
-            mipmapped: source.mipmapLevelCount > 1
-        )
-        desc.usage = [.shaderRead]
-        guard let destTexture = device.makeTexture(descriptor: desc) else {
-            throw TextureError.formatNotSupported(targetFormat)
         }
 
         guard let buffer = commandQueue.makeCommandBuffer(),
@@ -133,7 +123,7 @@ public final class TextureLoader {
             throw TextureError.textureCreationFailed
         }
 
-        let mipLevels = min(source.mipmapLevelCount, destTexture.mipmapLevelCount)
+        let mipLevels = min(source.mipmapLevelCount, destination.mipmapLevelCount)
         for level in 0..<mipLevels {
             let w = max(1, source.width >> level)
             let h = max(1, source.height >> level)
@@ -143,7 +133,7 @@ public final class TextureLoader {
                 sourceLevel: level,
                 sourceOrigin: .init(x: 0, y: 0, z: 0),
                 sourceSize: MTLSize(width: w, height: h, depth: 1),
-                to: destTexture,
+                to: destination,
                 destinationSlice: 0,
                 destinationLevel: level,
                 destinationOrigin: .init(x: 0, y: 0, z: 0)
@@ -156,8 +146,18 @@ public final class TextureLoader {
         if let error = buffer.error {
             throw TextureError.exportFailed(error)
         }
+    }
 
-        return destTexture
+    /// Optimizes a texture for GPU access (driver-level compression/tiling).
+    public func optimizeForGPU(texture: MTLTexture) throws {
+        guard let buffer = commandQueue.makeCommandBuffer(),
+              let blit = buffer.makeBlitCommandEncoder() else {
+            throw TextureError.textureCreationFailed
+        }
+        blit.optimizeContentsForGPUAccess(texture: texture)
+        blit.endEncoding()
+        buffer.commit()
+        buffer.waitUntilCompleted()
     }
 
     public func exportTexture(_ texture: MTLTexture, to url: URL, format: ExportFormat = .png) throws {

@@ -156,6 +156,15 @@ public final class AssetDatabase: @unchecked Sendable {
         return updated
     }
 
+    /// Moves an asset into a target folder within the same category.
+    public func moveAsset(entry: AssetEntry, toFolderRelativePath folderPath: String) throws {
+        _ = try projectManager.moveAsset(
+            relativePath: entry.relativePath,
+            toFolder: folderPath
+        )
+        notifyObservers(category: entry.category, changes: [.removed(entry.guid)])
+    }
+
     // MARK: - Subfolder Management
 
     public func createSubfolder(named name: String, in category: AssetCategory, parentSubpath: String? = nil) throws {
@@ -191,6 +200,25 @@ public final class AssetDatabase: @unchecked Sendable {
     }
 
     // MARK: - Search
+
+    /// Returns all non-directory entries in a category, recursively including subfolders.
+    public func allFiles(in category: AssetCategory) -> [AssetEntry] {
+        collectFiles(in: category, subfolder: nil)
+    }
+
+    private func collectFiles(in category: AssetCategory, subfolder: String?) -> [AssetEntry] {
+        let items = entries(in: category, subfolder: subfolder)
+        var result: [AssetEntry] = []
+        for item in items {
+            if item.isDirectory {
+                let sub = subfolder.map { $0 + "/" + item.name } ?? item.name
+                result.append(contentsOf: collectFiles(in: category, subfolder: sub))
+            } else {
+                result.append(item)
+            }
+        }
+        return result
+    }
 
     public func search(query: String, category: AssetCategory? = nil) -> [AssetEntry] {
         let results = projectManager.searchAssets(query: query, category: category)

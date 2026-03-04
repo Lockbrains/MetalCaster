@@ -107,60 +107,29 @@ struct ECSEntityBrowserView: View {
                 }
                 .padding(.vertical, MCTheme.panelPadding)
             }
+            .focusable()
+            .focusEffectDisabled()
+            .onKeyPress(.return) {
+                if state.renamingEntityID == nil,
+                   let selected = state.selectedEntity {
+                    state.renamingEntityID = selected
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.escape) {
+                if state.renamingEntityID != nil {
+                    state.renamingEntityID = nil
+                    return .handled
+                }
+                return .ignored
+            }
         }
     }
 
     @ViewBuilder
     private func entityRow(_ entity: Entity, world: World) -> some View {
-        let selected = state.selectedEntity == entity
-        let name = state.sceneGraph.name(of: entity)
-        let keys = world.componentTypeKeys(of: entity).sorted { $0.name < $1.name }
-
-        HStack(spacing: 6) {
-            MCStatusDot(color: MCTheme.textPrimary)
-            Text(name)
-                .font(MCTheme.fontBody)
-                .foregroundStyle(MCTheme.textPrimary)
-                .lineLimit(1)
-            Spacer()
-            HStack(spacing: 2) {
-                ForEach(Array(keys.prefix(3)), id: \.name) { k in
-                    Text(abbreviation(k.name))
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(componentColor(k.name))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(componentColor(k.name).opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 2))
-                }
-                if keys.count > 3 {
-                    Text("+\(keys.count - 3)")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(MCTheme.textTertiary)
-                }
-            }
-        }
-        .padding(.horizontal, MCTheme.panelPadding)
-        .frame(height: MCTheme.rowHeight)
-        .background(selected ? MCTheme.surfaceSelected : Color.clear)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            state.selectedAssetEntry = nil
-            state.selectedEntity = entity
-        }
-        .onDrop(of: [.plainText], isTargeted: nil) { providers in
-            handleMaterialDrop(providers, onto: entity, world: world)
-        }
-        .contextMenu {
-            Button("Duplicate") {
-                state.selectedEntity = entity
-                state.duplicateSelectedEntity()
-            }
-            Button("Delete", role: .destructive) {
-                state.selectedEntity = entity
-                state.deleteSelectedEntity()
-            }
-        }
+        EntityRowView(entity: entity, world: world)
     }
 
     private func handleMaterialDrop(_ providers: [NSItemProvider], onto entity: Entity, world: World) -> Bool {
@@ -203,6 +172,135 @@ struct ECSEntityBrowserView: View {
     }
 
     private func componentColor(_ name: String) -> Color {
+        EntityRowView.componentColor(name)
+    }
+}
+
+// MARK: - Entity Row (supports inline rename)
+
+struct EntityRowView: View {
+    let entity: Entity
+    let world: World
+    @Environment(EditorState.self) private var state
+    @State private var renameText = ""
+    @FocusState private var renameFieldFocused: Bool
+
+    private var isRenaming: Bool { state.renamingEntityID == entity }
+    private var selected: Bool { state.selectedEntity == entity }
+
+    var body: some View {
+        let name = state.sceneGraph.name(of: entity)
+        let keys = world.componentTypeKeys(of: entity).sorted { $0.name < $1.name }
+
+        HStack(spacing: 6) {
+            MCStatusDot(color: MCTheme.textPrimary)
+
+            if isRenaming {
+                #if canImport(AppKit)
+                RenameField(text: $renameText, isFocused: $renameFieldFocused) {
+                    commitRename()
+                }
+                .onChange(of: renameFieldFocused) { _, focused in
+                    if !focused { commitRename() }
+                }
+                #endif
+            } else {
+                Text(name)
+                    .font(MCTheme.fontBody)
+                    .foregroundStyle(MCTheme.textPrimary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+            HStack(spacing: 2) {
+                ForEach(Array(keys.prefix(3)), id: \.name) { k in
+                    Text(abbreviation(k.name))
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Self.componentColor(k.name))
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(Self.componentColor(k.name).opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 2))
+                }
+                if keys.count > 3 {
+                    Text("+\(keys.count - 3)")
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundStyle(MCTheme.textTertiary)
+                }
+            }
+        }
+        .padding(.horizontal, MCTheme.panelPadding)
+        .frame(height: MCTheme.rowHeight)
+        .background(selected ? MCTheme.surfaceSelected : Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            state.selectedAssetEntry = nil
+            state.selectedEntity = entity
+        }
+        .onDrop(of: [.plainText], isTargeted: nil) { providers in
+            handleMaterialDrop(providers)
+        }
+        .contextMenu {
+            Button("Rename") {
+                state.renamingEntityID = entity
+            }
+            Divider()
+            Button("Duplicate") {
+                state.selectedEntity = entity
+                state.duplicateSelectedEntity()
+            }
+            Button("Delete", role: .destructive) {
+                state.selectedEntity = entity
+                state.deleteSelectedEntity()
+            }
+        }
+        .onChange(of: state.renamingEntityID) { _, newVal in
+            if newVal == entity {
+                renameText = state.sceneGraph.name(of: entity)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    renameFieldFocused = true
+                }
+            }
+        }
+    }
+
+    private func commitRename() {
+        guard isRenaming else { return }
+        state.renamingEntityID = nil
+        renameFieldFocused = false
+        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != state.sceneGraph.name(of: entity) else { return }
+        state.updateComponent(NameComponent.self, on: entity) { $0.name = trimmed }
+    }
+
+    private func handleMaterialDrop(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: NSString.self) {
+                provider.loadObject(ofClass: NSString.self) { item, _ in
+                    guard let str = item as? NSString,
+                          let guid = UUID(uuidString: str as String),
+                          let url = state.assetDatabase.resolveURL(for: guid),
+                          url.pathExtension == "mcmat" else { return }
+                    DispatchQueue.main.async {
+                        state.assignMaterialAsset(from: url, to: entity)
+                    }
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    // MARK: - Helpers
+
+    private func abbreviation(_ name: String) -> String {
+        let short = name.replacingOccurrences(of: "Component", with: "")
+        if short.count <= 4 { return short }
+        let upper = short.filter(\.isUppercase)
+        return upper.isEmpty ? String(short.prefix(3)).uppercased() : String(upper.prefix(3))
+    }
+
+    static func componentColor(_ name: String) -> Color {
         let palette: [Color] = [
             MCTheme.statusGreen, MCTheme.statusBlue, MCTheme.statusOrange,
             MCTheme.statusYellow, MCTheme.statusRed,

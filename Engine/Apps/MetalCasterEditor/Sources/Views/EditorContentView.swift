@@ -14,8 +14,10 @@ struct EditorContentView: View {
     var body: some View {
         VSplitView {
             HSplitView {
-                MCPanel(titleNormal: "Scene", titleBold: "Editor") {
+                MCPanelCustomTitle {
                     SceneEditorView()
+                } title: {
+                    sceneEditorPanelTitle
                 }
                 .frame(minWidth: 300, minHeight: 200)
 
@@ -41,10 +43,11 @@ struct EditorContentView: View {
                 .frame(minWidth: 300, minHeight: 140)
 
                 MCPanelCustomTitle {
-                    if assetsTab == 0 {
-                        ProjectAssetsView()
-                    } else {
-                        ConsoleView()
+                    switch assetsTab {
+                    case 0: ProjectAssetsView()
+                    case 1: ConsoleView()
+                    case 2: VersionControlView()
+                    default: ProjectAssetsView()
                     }
                 } title: {
                     assetsPanelTitle
@@ -111,6 +114,12 @@ struct EditorContentView: View {
                 .environment(state)
                 .frame(width: 520, height: 480)
         }
+        .onChange(of: state.showShaderCanvas) { _, show in
+            if show { ToolWindowManager.open(.shaderCanvas, state: state) }
+        }
+        .onChange(of: state.showSDFCanvas) { _, show in
+            if show { ToolWindowManager.open(.sdfCanvas, state: state) }
+        }
         .alert(
             "Unsaved Changes",
             isPresented: Binding(
@@ -162,6 +171,48 @@ struct EditorContentView: View {
                 Text("Install .prompt syntax highlighting into Xcode? This enables colored comments, keywords, and bracket content when editing Prompt Scripts. Requires admin privileges and a restart of Xcode.")
             }
         }
+    }
+
+    private var sceneEditorPanelTitle: some View {
+        HStack(spacing: 4) {
+            Text("Scene")
+                .font(MCTheme.fontPanelLabel)
+                .foregroundStyle(MCTheme.textSecondary)
+            Text("Editor")
+                .font(MCTheme.fontPanelLabelBold)
+                .foregroundStyle(MCTheme.textPrimary)
+            Spacer()
+            playButton
+        }
+    }
+
+    private var isBuilding: Bool {
+        if case .building = state.buildSystem.status { return true }
+        return false
+    }
+
+    private var playButton: some View {
+        Button {
+            state.playInEditor()
+        } label: {
+            if isBuilding {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.white)
+                    Text("Compiling...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+            } else {
+                Text(state.buildSystem.isPlaying ? "Stop" : "Play")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isBuilding)
+        .keyboardShortcut("r")
     }
 
     private var outputCameraPanelTitle: some View {
@@ -245,6 +296,17 @@ struct EditorContentView: View {
                             )
                             .clipShape(Capsule())
                     }
+                }
+            }
+            .buttonStyle(.plain)
+
+            Button { assetsTab = 2 } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9))
+                    Text("VCS")
+                        .font(assetsTab == 2 ? MCTheme.fontPanelLabelBold : MCTheme.fontPanelLabel)
+                        .foregroundStyle(assetsTab == 2 ? MCTheme.textPrimary : MCTheme.textTertiary)
                 }
             }
             .buttonStyle(.plain)

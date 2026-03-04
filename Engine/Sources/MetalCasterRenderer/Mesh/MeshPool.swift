@@ -9,6 +9,7 @@ public final class MeshPool {
     private let device: MTLDevice
     private let allocator: MTKMeshBufferAllocator
     private var cache: [String: MTKMesh] = [:]
+    private var metadataCache: [String: MeshMetadata] = [:]
 
     /// The standard vertex descriptor used by all meshes in the engine.
     /// Layout: position(float3) + normal(float3) + texCoord(float2), stride = 32
@@ -49,18 +50,27 @@ public final class MeshPool {
         let mesh = loadMesh(type: type)
         if let mesh = mesh {
             cache[key] = mesh
+            metadataCache[key] = MeshMetadata.extract(from: mesh)
         }
         return mesh
     }
 
+    /// Returns metadata for a cached mesh, or nil if not yet loaded.
+    public func metadata(for type: MeshType) -> MeshMetadata? {
+        metadataCache[cacheKey(for: type)]
+    }
+
     /// Invalidates the cache for a specific mesh type.
     public func invalidate(_ type: MeshType) {
-        cache.removeValue(forKey: cacheKey(for: type))
+        let key = cacheKey(for: type)
+        cache.removeValue(forKey: key)
+        metadataCache.removeValue(forKey: key)
     }
 
     /// Invalidates all cached meshes.
     public func invalidateAll() {
         cache.removeAll()
+        metadataCache.removeAll()
     }
 
     // MARK: - Private

@@ -119,6 +119,48 @@ public final class ShaderCompiler {
         return try device.makeRenderPipelineState(descriptor: desc)
     }
 
+    // MARK: - Compute Pipeline
+
+    /// Compiles a compute pipeline from MSL source containing a kernel function.
+    public func compileComputePipeline(
+        source: String,
+        functionName: String = "kernel_main"
+    ) throws -> MTLComputePipelineState {
+        let lib = try compile(source: source)
+        guard let function = lib.makeFunction(name: functionName) else {
+            throw ShaderCompilationError.missingEntryPoint
+        }
+        return try device.makeComputePipelineState(function: function)
+    }
+
+    /// Creates a compute pipeline from a pre-compiled library.
+    public func compileComputePipeline(
+        library: MTLLibrary,
+        functionName: String = "kernel_main"
+    ) throws -> MTLComputePipelineState {
+        guard let function = library.makeFunction(name: functionName) else {
+            throw ShaderCompilationError.missingEntryPoint
+        }
+        return try device.makeComputePipelineState(function: function)
+    }
+
+    /// Compiles a compute pipeline with explicit descriptor for advanced configuration
+    /// (max total threads, linked functions, etc).
+    public func compileComputePipeline(
+        source: String,
+        functionName: String = "kernel_main",
+        configure: (MTLComputePipelineDescriptor) -> Void
+    ) throws -> MTLComputePipelineState {
+        let lib = try compile(source: source)
+        guard let function = lib.makeFunction(name: functionName) else {
+            throw ShaderCompilationError.missingEntryPoint
+        }
+        let desc = MTLComputePipelineDescriptor()
+        desc.computeFunction = function
+        configure(desc)
+        return try device.makeComputePipelineState(descriptor: desc, options: [], reflection: nil)
+    }
+
     /// Extracts concise MSL error lines from a Metal compilation error string.
     public static func extractMSLErrors(from fullError: String) -> String {
         fullError.components(separatedBy: "\n")

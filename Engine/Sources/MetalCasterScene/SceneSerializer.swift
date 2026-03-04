@@ -1,5 +1,6 @@
 import Foundation
 import MetalCasterCore
+import MetalCasterAudio
 
 /// Serializes/deserializes a complete scene (entities + components) to/from JSON.
 ///
@@ -46,6 +47,39 @@ public final class SceneSerializer {
             }
             if let scriptRef = world.getComponent(GameplayScriptRef.self, from: entity) {
                 entityData.gameplayScriptRef = scriptRef
+            }
+            if let audioSource = world.getComponent(AudioSourceComponent.self, from: entity) {
+                var saved = audioSource
+                saved.isPlaying = false
+                saved._playerID = nil
+                entityData.audioSource = saved
+            }
+            if let audioListener = world.getComponent(AudioListenerComponent.self, from: entity) {
+                entityData.audioListener = audioListener
+            }
+            if let lod = world.getComponent(LODComponent.self, from: entity) {
+                entityData.lod = lod
+            }
+            if let physicsBody = world.getComponent(PhysicsBodyComponent.self, from: entity) {
+                entityData.physicsBody = physicsBody
+            }
+            if let collider = world.getComponent(ColliderComponent.self, from: entity) {
+                entityData.collider = collider
+            }
+            if let uiCanvas = world.getComponent(UICanvasComponent.self, from: entity) {
+                entityData.uiCanvas = uiCanvas
+            }
+            if let uiElement = world.getComponent(UIElementComponent.self, from: entity) {
+                entityData.uiElement = uiElement
+            }
+            if let uiLabel = world.getComponent(UILabelComponent.self, from: entity) {
+                entityData.uiLabel = uiLabel
+            }
+            if let uiImage = world.getComponent(UIImageComponent.self, from: entity) {
+                entityData.uiImage = uiImage
+            }
+            if let uiPanel = world.getComponent(UIPanelComponent.self, from: entity) {
+                entityData.uiPanel = uiPanel
             }
             
             sceneData.entities.append(entityData)
@@ -110,6 +144,36 @@ public final class SceneSerializer {
             if let scriptRef = ed.gameplayScriptRef {
                 world.addComponent(scriptRef, to: entity)
             }
+            if let audioSource = ed.audioSource {
+                world.addComponent(audioSource, to: entity)
+            }
+            if let audioListener = ed.audioListener {
+                world.addComponent(audioListener, to: entity)
+            }
+            if let lod = ed.lod {
+                world.addComponent(lod, to: entity)
+            }
+            if let physicsBody = ed.physicsBody {
+                world.addComponent(physicsBody, to: entity)
+            }
+            if let collider = ed.collider {
+                world.addComponent(collider, to: entity)
+            }
+            if let uiCanvas = ed.uiCanvas {
+                world.addComponent(uiCanvas, to: entity)
+            }
+            if let uiElement = ed.uiElement {
+                world.addComponent(uiElement, to: entity)
+            }
+            if let uiLabel = ed.uiLabel {
+                world.addComponent(uiLabel, to: entity)
+            }
+            if let uiImage = ed.uiImage {
+                world.addComponent(uiImage, to: entity)
+            }
+            if let uiPanel = ed.uiPanel {
+                world.addComponent(uiPanel, to: entity)
+            }
         }
     }
 }
@@ -133,4 +197,14 @@ struct EntityData: Codable {
     var skybox: SkyboxComponent?
     var postProcessVolume: PostProcessVolumeComponent?
     var gameplayScriptRef: GameplayScriptRef?
+    var audioSource: AudioSourceComponent?
+    var audioListener: AudioListenerComponent?
+    var lod: LODComponent?
+    var physicsBody: PhysicsBodyComponent?
+    var collider: ColliderComponent?
+    var uiCanvas: UICanvasComponent?
+    var uiElement: UIElementComponent?
+    var uiLabel: UILabelComponent?
+    var uiImage: UIImageComponent?
+    var uiPanel: UIPanelComponent?
 }

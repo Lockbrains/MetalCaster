@@ -129,7 +129,7 @@ public struct ActiveShader: Identifiable, Codable, Sendable {
 // MARK: - Data Flow Configuration
 
 /// Configurable vertex data fields shared across all mesh shaders.
-public struct DataFlowConfig: Codable, Equatable, Sendable {
+public struct DataFlowConfig: Codable, Equatable, Hashable, Sendable {
     public var normalEnabled: Bool
     public var uvEnabled: Bool
     public var timeEnabled: Bool

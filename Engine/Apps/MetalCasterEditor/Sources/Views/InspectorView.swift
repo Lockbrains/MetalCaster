@@ -5,14 +5,19 @@ import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
 import MetalCasterAsset
+import MetalCasterPhysics
+import MetalCasterAudio
 
 #if canImport(AppKit)
 import AppKit
+import ImageIO
+import CoreGraphics
 #endif
 
 struct InspectorView: View {
     @Environment(EditorState.self) private var state
     @State private var transformResetID = UUID()
+    @State private var showComponentPicker = false
 
     var body: some View {
         let _ = state.worldRevision
@@ -21,6 +26,9 @@ struct InspectorView: View {
         } else if let assetEntry = state.selectedAssetEntry,
                   assetEntry.fileExtension == "mcmat" {
             materialAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  Self.textureExtensions.contains(assetEntry.fileExtension.lowercased()) {
+            textureAssetInspector(entry: assetEntry)
         } else {
             ZStack {
                 MCTheme.background
@@ -55,6 +63,10 @@ struct InspectorView: View {
                     meshSection(entity)
                     sectionDivider()
                 }
+                if state.engine.world.hasComponent(LODComponent.self, on: entity) {
+                    lodSection(entity)
+                    sectionDivider()
+                }
                 if state.engine.world.hasComponent(MaterialComponent.self, on: entity) {
                     materialSection(entity)
                     sectionDivider()
@@ -65,6 +77,42 @@ struct InspectorView: View {
                 }
                 if state.engine.world.hasComponent(PostProcessVolumeComponent.self, on: entity) {
                     postProcessVolumeSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(PhysicsBodyComponent.self, on: entity) {
+                    physicsBodySection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(ColliderComponent.self, on: entity) {
+                    colliderSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(AudioSourceComponent.self, on: entity) {
+                    audioSourceSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(AudioListenerComponent.self, on: entity) {
+                    audioListenerSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(UICanvasComponent.self, on: entity) {
+                    uiCanvasSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(UIElementComponent.self, on: entity) {
+                    uiElementSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(UILabelComponent.self, on: entity) {
+                    uiLabelSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(UIImageComponent.self, on: entity) {
+                    uiImageSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(UIPanelComponent.self, on: entity) {
+                    uiPanelSection(entity)
                     sectionDivider()
                 }
                 if state.engine.world.hasComponent(GameplayScriptRef.self, on: entity) {
@@ -341,6 +389,22 @@ struct InspectorView: View {
             .frame(height: 1)
     }
 
+    private static let textureExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
+
+    private func removeComponentButton<C: Component>(_ type: C.Type, from entity: Entity, label: String = "Remove") -> some View {
+        Button {
+            state.engine.world.removeComponent(type, from: entity)
+            state.worldRevision += 1
+            state.markDirty()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 9))
+                .foregroundStyle(MCTheme.textTertiary)
+        }
+        .buttonStyle(.plain)
+        .help(label)
+    }
+
     @ViewBuilder
     private func nameSection(_ entity: Entity) -> some View {
         MCSection(title: "Name") {
@@ -416,6 +480,8 @@ struct InspectorView: View {
 
         // MARK: Projection & Base
         MCSection(title: "Camera") {
+            removeComponentButton(CameraComponent.self, from: entity, label: "Remove Camera")
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Projection", selection: Binding(
                     get: { cam?.projection ?? .perspective },
@@ -710,6 +776,8 @@ struct InspectorView: View {
     @ViewBuilder
     private func lightSection(_ entity: Entity) -> some View {
         MCSection(title: "Light") {
+            removeComponentButton(LightComponent.self, from: entity, label: "Remove Light")
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Type", selection: Binding(
                     get: { state.engine.world.getComponent(LightComponent.self, from: entity)?.type ?? .directional },
@@ -769,9 +837,103 @@ struct InspectorView: View {
     private func meshSection(_ entity: Entity) -> some View {
         if let mc = state.engine.world.getComponent(MeshComponent.self, from: entity) {
             MCSection(title: "Mesh") {
+                removeComponentButton(MeshComponent.self, from: entity, label: "Remove Mesh")
+            } content: {
                 Text(meshTypeDisplay(mc.meshType))
                     .font(MCTheme.fontBody)
                     .foregroundStyle(MCTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func lodSection(_ entity: Entity) -> some View {
+        if let lod = state.engine.world.getComponent(LODComponent.self, from: entity) {
+            MCSection(title: "LOD") {
+                removeComponentButton(LODComponent.self, from: entity, label: "Remove LOD")
+            } content: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Active Level")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                        Spacer()
+                        Text("\(lod.activeLevelIndex)")
+                            .font(MCTheme.fontMono)
+                            .foregroundStyle(MCTheme.textSecondary)
+                    }
+
+                    Toggle("Cull Beyond Max", isOn: Binding(
+                        get: { lod.cullBeyondMaxDistance },
+                        set: { newVal in
+                            state.updateComponent(LODComponent.self, on: entity) { c in
+                                c.cullBeyondMaxDistance = newVal
+                            }
+                        }
+                    ))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+
+                    ForEach(lod.levels.indices, id: \.self) { i in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Level \(i)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(i == lod.activeLevelIndex ? MCTheme.statusGreen : MCTheme.textTertiary)
+
+                            HStack {
+                                Text("Mesh")
+                                    .font(MCTheme.fontCaption)
+                                    .foregroundStyle(MCTheme.textSecondary)
+                                    .frame(width: 70, alignment: .leading)
+                                Text(meshTypeDisplay(lod.levels[i].meshType))
+                                    .font(MCTheme.fontCaption)
+                                    .foregroundStyle(MCTheme.textSecondary)
+                            }
+
+                            MCDraggableField(
+                                label: "Dist",
+                                displayValue: lod.levels[i].maxDistance,
+                                getValue: {
+                                    guard let c = state.engine.world.getComponent(LODComponent.self, from: entity),
+                                          i < c.levels.count else { return 0 }
+                                    return c.levels[i].maxDistance
+                                },
+                                onChanged: { newVal in
+                                    state.updateComponent(LODComponent.self, on: entity) { c in
+                                        guard i < c.levels.count else { return }
+                                        c.levels[i].maxDistance = newVal
+                                    }
+                                },
+                                step: 1.0,
+                                labelWidth: 70
+                            )
+                        }
+                        .padding(6)
+                        .background(Color.white.opacity(0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+
+                    if lod.levels.isEmpty {
+                        Text("No LOD levels defined")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+
+                    Button {
+                        state.updateComponent(LODComponent.self, on: entity) { c in
+                            let nextDist = (c.levels.last?.maxDistance ?? 0) + 20
+                            let mesh = state.engine.world.getComponent(MeshComponent.self, from: entity)?.meshType ?? .sphere
+                            c.levels.append(LODLevel(meshType: mesh, maxDistance: nextDist))
+                        }
+                    } label: {
+                        Label("Add Level", systemImage: "plus.circle")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -782,6 +944,7 @@ struct InspectorView: View {
 
         MCSection(title: "Material") {
             HStack(spacing: 4) {
+                removeComponentButton(MaterialComponent.self, from: entity, label: "Remove Material")
                 Menu {
                     Section("New") {
                         Button("Lit Material") {
@@ -1419,6 +1582,8 @@ struct InspectorView: View {
         let sky = state.engine.world.getComponent(SkyboxComponent.self, from: entity)
 
         MCSection(title: "Skybox") {
+            removeComponentButton(SkyboxComponent.self, from: entity, label: "Remove Skybox")
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("HDRI")
@@ -1472,6 +1637,8 @@ struct InspectorView: View {
         let vol = state.engine.world.getComponent(PostProcessVolumeComponent.self, from: entity)
 
         MCSection(title: "Post Process Volume") {
+            removeComponentButton(PostProcessVolumeComponent.self, from: entity, label: "Remove Post Process")
+        } content: {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Global (Infinite)", isOn: Binding(
                     get: { vol?.isGlobal ?? true },
@@ -2071,6 +2238,494 @@ struct InspectorView: View {
         }
     }
 
+    // MARK: - Physics Body Section
+
+    @ViewBuilder
+    private func physicsBodySection(_ entity: Entity) -> some View {
+        let body = state.engine.world.getComponent(PhysicsBodyComponent.self, from: entity)
+
+        MCSection(title: "Physics Body") {
+            removeComponentButton(PhysicsBodyComponent.self, from: entity, label: "Remove Physics Body")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Type", selection: Binding(
+                    get: { body?.bodyType ?? .dynamicBody },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.bodyType = val } }
+                )) {
+                    Text("Static").tag(PhysicsBodyComponent.BodyType.staticBody)
+                    Text("Dynamic").tag(PhysicsBodyComponent.BodyType.dynamicBody)
+                    Text("Kinematic").tag(PhysicsBodyComponent.BodyType.kinematic)
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                liveFloatRow(label: "Mass", entity: entity,
+                    get: { body?.mass ?? 1.0 },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.mass = val } })
+
+                liveFloatRow(label: "Restitution", entity: entity,
+                    get: { body?.restitution ?? 0.3 },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.restitution = val } })
+
+                liveFloatRow(label: "Friction", entity: entity,
+                    get: { body?.friction ?? 0.5 },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.friction = val } })
+
+                Toggle("Use Gravity", isOn: Binding(
+                    get: { body?.useGravity ?? true },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.useGravity = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+                liveFloatRow(label: "Lin Damp", entity: entity,
+                    get: { body?.linearDamping ?? 0.01 },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.linearDamping = val } })
+
+                liveFloatRow(label: "Ang Damp", entity: entity,
+                    get: { body?.angularDamping ?? 0.05 },
+                    set: { val in state.updateComponent(PhysicsBodyComponent.self, on: entity) { $0.angularDamping = val } })
+            }
+        }
+    }
+
+    // MARK: - Collider Section
+
+    @ViewBuilder
+    private func colliderSection(_ entity: Entity) -> some View {
+        let col = state.engine.world.getComponent(ColliderComponent.self, from: entity)
+
+        MCSection(title: "Collider") {
+            removeComponentButton(ColliderComponent.self, from: entity, label: "Remove Collider")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Shape", selection: Binding(
+                    get: { col?.shape ?? .sphere },
+                    set: { val in state.updateComponent(ColliderComponent.self, on: entity) { $0.shape = val } }
+                )) {
+                    Text("Sphere").tag(ColliderComponent.Shape.sphere)
+                    Text("Box").tag(ColliderComponent.Shape.box)
+                    Text("Capsule").tag(ColliderComponent.Shape.capsule)
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                if col?.shape == .sphere || col?.shape == .capsule {
+                    liveFloatRow(label: "Radius", entity: entity,
+                        get: { col?.radius ?? 1.0 },
+                        set: { val in state.updateComponent(ColliderComponent.self, on: entity) { $0.radius = val } })
+                }
+                if col?.shape == .box {
+                    liveVec3Row(label: "Half Extents", entity: entity,
+                        get: { col?.halfExtents ?? SIMD3<Float>(0.5, 0.5, 0.5) },
+                        set: { val in state.updateComponent(ColliderComponent.self, on: entity) { $0.halfExtents = val } })
+                }
+
+                Toggle("Is Trigger", isOn: Binding(
+                    get: { col?.isTrigger ?? false },
+                    set: { val in state.updateComponent(ColliderComponent.self, on: entity) { $0.isTrigger = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+                liveVec3Row(label: "Offset", entity: entity,
+                    get: { col?.offset ?? .zero },
+                    set: { val in state.updateComponent(ColliderComponent.self, on: entity) { $0.offset = val } })
+            }
+        }
+    }
+
+    // MARK: - Audio Source Section
+
+    @ViewBuilder
+    private func audioSourceSection(_ entity: Entity) -> some View {
+        let src = state.engine.world.getComponent(AudioSourceComponent.self, from: entity)
+
+        MCSection(title: "Audio Source") {
+            removeComponentButton(AudioSourceComponent.self, from: entity, label: "Remove Audio Source")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    MCAssetPicker(
+                        label: "Audio File",
+                        category: .audio,
+                        extensions: ["wav", "mp3", "aac", "m4a", "ogg", "flac"],
+                        selection: Binding(
+                            get: { src?.audioFile ?? "" },
+                            set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.audioFile = val } }
+                        )
+                    )
+
+                    Button {
+                        let playing = src?.isPlaying ?? false
+                        state.updateComponent(AudioSourceComponent.self, on: entity) {
+                            $0.isPlaying = !playing
+                        }
+                    } label: {
+                        Image(systemName: (src?.isPlaying ?? false) ? "stop.fill" : "play.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle((src?.isPlaying ?? false) ? MCTheme.statusRed : MCTheme.statusGreen)
+                            .frame(width: 20, height: 20)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(src?.audioFile.isEmpty ?? true)
+                }
+
+                liveFloatRow(label: "Volume", entity: entity,
+                    get: { src?.volume ?? 1.0 },
+                    set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.volume = val } })
+
+                liveFloatRow(label: "Pitch", entity: entity,
+                    get: { src?.pitch ?? 1.0 },
+                    set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.pitch = val } })
+
+                Toggle("Looping", isOn: Binding(
+                    get: { src?.isLooping ?? false },
+                    set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.isLooping = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+                Toggle("3D Spatial", isOn: Binding(
+                    get: { src?.is3D ?? true },
+                    set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.is3D = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+                if src?.is3D == true {
+                    liveFloatRow(label: "Max Dist", entity: entity,
+                        get: { src?.maxDistance ?? 50.0 },
+                        set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.maxDistance = val } })
+                    liveFloatRow(label: "Ref Dist", entity: entity,
+                        get: { src?.referenceDistance ?? 1.0 },
+                        set: { val in state.updateComponent(AudioSourceComponent.self, on: entity) { $0.referenceDistance = val } })
+                }
+            }
+        }
+    }
+
+    // MARK: - Audio Listener Section
+
+    @ViewBuilder
+    private func audioListenerSection(_ entity: Entity) -> some View {
+        let listener = state.engine.world.getComponent(AudioListenerComponent.self, from: entity)
+
+        MCSection(title: "Audio Listener") {
+            removeComponentButton(AudioListenerComponent.self, from: entity, label: "Remove Audio Listener")
+        } content: {
+            Toggle("Active", isOn: Binding(
+                get: { listener?.isActive ?? true },
+                set: { val in state.updateComponent(AudioListenerComponent.self, on: entity) { $0.isActive = val } }
+            ))
+            .font(MCTheme.fontCaption)
+            .foregroundStyle(MCTheme.textSecondary)
+        }
+    }
+
+    // MARK: - UI Component Sections
+
+    @ViewBuilder
+    private func uiCanvasSection(_ entity: Entity) -> some View {
+        let canvas = state.engine.world.getComponent(UICanvasComponent.self, from: entity)
+
+        MCSection(title: "UI Canvas") {
+            removeComponentButton(UICanvasComponent.self, from: entity, label: "Remove UI Canvas")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Render Space", selection: Binding(
+                    get: { canvas?.renderSpace ?? .screen },
+                    set: { val in state.updateComponent(UICanvasComponent.self, on: entity) { $0.renderSpace = val } }
+                )) {
+                    Text("Screen").tag(UICanvasComponent.RenderSpace.screen)
+                    Text("World").tag(UICanvasComponent.RenderSpace.world)
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                HStack {
+                    Text("Sort Order")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    TextField("0", value: Binding(
+                        get: { canvas?.sortOrder ?? 0 },
+                        set: { val in state.updateComponent(UICanvasComponent.self, on: entity) { $0.sortOrder = val } }
+                    ), formatter: NumberFormatter())
+                    .textFieldStyle(.plain)
+                    .font(MCTheme.fontCaption)
+                }
+
+                Toggle("Enabled", isOn: Binding(
+                    get: { canvas?.isEnabled ?? true },
+                    set: { val in state.updateComponent(UICanvasComponent.self, on: entity) { $0.isEnabled = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func uiElementSection(_ entity: Entity) -> some View {
+        let el = state.engine.world.getComponent(UIElementComponent.self, from: entity)
+
+        MCSection(title: "UI Element") {
+            removeComponentButton(UIElementComponent.self, from: entity, label: "Remove UI Element")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Type", selection: Binding(
+                    get: { el?.elementType ?? .panel },
+                    set: { val in state.updateComponent(UIElementComponent.self, on: entity) { $0.elementType = val } }
+                )) {
+                    Text("Label").tag(UIElementType.label)
+                    Text("Image").tag(UIElementType.image)
+                    Text("Panel").tag(UIElementType.panel)
+                    Text("Button").tag(UIElementType.button)
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                liveVec3Row(label: "Position", entity: entity,
+                    get: { SIMD3<Float>(el?.offset.x ?? 0, el?.offset.y ?? 0, 0) },
+                    set: { val in state.updateComponent(UIElementComponent.self, on: entity) { $0.offset = SIMD2<Float>(val.x, val.y) } })
+
+                Toggle("Visible", isOn: Binding(
+                    get: { el?.isVisible ?? true },
+                    set: { val in state.updateComponent(UIElementComponent.self, on: entity) { $0.isVisible = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func uiLabelSection(_ entity: Entity) -> some View {
+        let lbl = state.engine.world.getComponent(UILabelComponent.self, from: entity)
+
+        MCSection(title: "UI Label") {
+            removeComponentButton(UILabelComponent.self, from: entity, label: "Remove UI Label")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Text")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    TextField("Label", text: Binding(
+                        get: { lbl?.text ?? "" },
+                        set: { val in state.updateComponent(UILabelComponent.self, on: entity) { $0.text = val } }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(MCTheme.fontCaption)
+                }
+
+                liveFloatRow(label: "Font Size", entity: entity,
+                    get: { lbl?.fontSize ?? 16 },
+                    set: { val in state.updateComponent(UILabelComponent.self, on: entity) { $0.fontSize = val } })
+
+                Picker("Alignment", selection: Binding(
+                    get: { lbl?.alignment ?? .left },
+                    set: { val in state.updateComponent(UILabelComponent.self, on: entity) { $0.alignment = val } }
+                )) {
+                    Text("Left").tag(UILabelComponent.TextAlignment.left)
+                    Text("Center").tag(UILabelComponent.TextAlignment.center)
+                    Text("Right").tag(UILabelComponent.TextAlignment.right)
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func uiImageSection(_ entity: Entity) -> some View {
+        let img = state.engine.world.getComponent(UIImageComponent.self, from: entity)
+
+        MCSection(title: "UI Image") {
+            removeComponentButton(UIImageComponent.self, from: entity, label: "Remove UI Image")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Texture")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    TextField("path/to/texture", text: Binding(
+                        get: { img?.texturePath ?? "" },
+                        set: { val in state.updateComponent(UIImageComponent.self, on: entity) { $0.texturePath = val } }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(MCTheme.fontCaption)
+                }
+
+                Toggle("Preserve Aspect", isOn: Binding(
+                    get: { img?.preserveAspect ?? true },
+                    set: { val in state.updateComponent(UIImageComponent.self, on: entity) { $0.preserveAspect = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func uiPanelSection(_ entity: Entity) -> some View {
+        MCSection(title: "UI Panel") {
+            removeComponentButton(UIPanelComponent.self, from: entity, label: "Remove UI Panel")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                liveFloatRow(label: "Corner R.", entity: entity,
+                    get: {
+                        state.engine.world.getComponent(UIPanelComponent.self, from: entity)?.cornerRadius ?? 8
+                    },
+                    set: { val in state.updateComponent(UIPanelComponent.self, on: entity) { $0.cornerRadius = val } })
+
+                liveFloatRow(label: "Border W.", entity: entity,
+                    get: {
+                        state.engine.world.getComponent(UIPanelComponent.self, from: entity)?.borderWidth ?? 1
+                    },
+                    set: { val in state.updateComponent(UIPanelComponent.self, on: entity) { $0.borderWidth = val } })
+            }
+        }
+    }
+
+    // MARK: - Texture Asset Inspector
+
+    @ViewBuilder
+    private func textureAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                texturePreviewSection(entry: entry)
+                sectionDivider()
+                textureInfoSection(entry: entry)
+                sectionDivider()
+                textureImportSettingsSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func texturePreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxHeight: 200)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(MCTheme.panelBorder, lineWidth: 1)
+                        )
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 40, weight: .thin))
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .frame(height: 100)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textureInfoSection(entry: AssetEntry) -> some View {
+        let info = loadTextureInfo(for: entry)
+
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: entry.fileExtension.uppercased())
+                if let info = info {
+                    infoRow("Dimensions", value: "\(info.width) × \(info.height)")
+                    infoRow("Color Space", value: info.colorSpace)
+                }
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textureImportSettingsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Import Settings") {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Type", selection: .constant(TextureUsageType.diffuse)) {
+                    ForEach(TextureUsageType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Picker("Compression", selection: .constant(TextureCompression.astc6x6)) {
+                    ForEach(TextureCompression.allCases, id: \.self) { fmt in
+                        Text(fmt.displayName).tag(fmt)
+                    }
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Toggle("Generate Mipmaps", isOn: .constant(true))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+
+                Toggle("sRGB", isOn: .constant(true))
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+            }
+        }
+    }
+
+    private func infoRow(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 80, alignment: .leading)
+            Text(value)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+                .lineLimit(1)
+            Spacer()
+        }
+    }
+
+    private struct TextureInfo {
+        let width: Int
+        let height: Int
+        let colorSpace: String
+    }
+
+    private func loadTextureInfo(for entry: AssetEntry) -> TextureInfo? {
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return nil }
+        #if canImport(CoreGraphics)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return nil
+        }
+        let w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+        let cs = (props[kCGImagePropertyColorModel] as? String) ?? "Unknown"
+        return TextureInfo(width: w, height: h, colorSpace: cs)
+        #else
+        return nil
+        #endif
+    }
+
+    private func formatByteSize(_ bytes: UInt64) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
+        return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
+    }
+
     // MARK: - Gameplay Script Section
 
     @ViewBuilder
@@ -2200,64 +2855,34 @@ struct InspectorView: View {
 
     @ViewBuilder
     private func addComponentSection(_ entity: Entity) -> some View {
-        let world = state.engine.world
         HStack {
             Spacer()
-            Menu("Add Component") {
-                if !world.hasComponent(MeshComponent.self, on: entity) {
-                    Button("Mesh") {
-                        world.addComponent(MeshComponent(), to: entity)
-                        if !world.hasComponent(MaterialComponent.self, on: entity) {
-                            world.addComponent(
-                                MaterialComponent(material: MaterialRegistry.litMaterial),
-                                to: entity
-                            )
-                        }
-                        state.worldRevision += 1
-                    }
+            Button {
+                showComponentPicker.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 12))
+                    Text("Add Component")
+                        .font(MCTheme.fontCaption)
                 }
-                if !world.hasComponent(MaterialComponent.self, on: entity) {
-                    Button("Material") {
-                        world.addComponent(
-                            MaterialComponent(material: MaterialRegistry.litMaterial),
-                            to: entity
-                        )
-                        state.worldRevision += 1
-                    }
-                }
-                if !world.hasComponent(CameraComponent.self, on: entity) {
-                    Button("Camera") {
-                        world.addComponent(CameraComponent(), to: entity)
-                        state.worldRevision += 1
-                    }
-                }
-                if !world.hasComponent(LightComponent.self, on: entity) {
-                    Button("Light") {
-                        world.addComponent(LightComponent(), to: entity)
-                        state.worldRevision += 1
-                    }
-                }
-                if !world.hasComponent(SkyboxComponent.self, on: entity) {
-                    Button("Skybox") {
-                        world.addComponent(SkyboxComponent(), to: entity)
-                        state.worldRevision += 1
-                    }
-                }
-                if !world.hasComponent(PostProcessVolumeComponent.self, on: entity) {
-                    Button("Post Process Volume") {
-                        world.addComponent(PostProcessVolumeComponent(), to: entity)
-                        state.worldRevision += 1
-                    }
-                }
-                if !world.hasComponent(GameplayScriptRef.self, on: entity) {
-                    Button("Gameplay Script") {
-                        world.addComponent(GameplayScriptRef(), to: entity)
-                        state.worldRevision += 1
-                        state.markDirty()
-                    }
-                }
+                .foregroundStyle(MCTheme.textPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(MCTheme.panelBorder, lineWidth: 1)
+                )
             }
-            .foregroundStyle(MCTheme.textPrimary)
+            .buttonStyle(.plain)
+            .popover(isPresented: $showComponentPicker, arrowEdge: .bottom) {
+                ComponentPickerView(entity: entity) {
+                    showComponentPicker = false
+                }
+                .environment(state)
+            }
             Spacer()
         }
         .padding(.vertical, MCTheme.panelPadding)
@@ -2687,5 +3312,45 @@ private struct ScaleRowView: View {
         var r = v
         if axis == 0 { r.x = val } else if axis == 1 { r.y = val } else { r.z = val }
         return r
+    }
+}
+
+// MARK: - Texture Import Enums
+
+enum TextureUsageType: String, CaseIterable {
+    case diffuse
+    case normalMap
+    case ui
+    case lightmap
+    case hdri
+    case mask
+
+    var displayName: String {
+        switch self {
+        case .diffuse:   return "Diffuse (Color)"
+        case .normalMap: return "Normal Map"
+        case .ui:        return "UI (Sprite)"
+        case .lightmap:  return "Lightmap"
+        case .hdri:      return "HDRI Environment"
+        case .mask:      return "Mask / Alpha"
+        }
+    }
+}
+
+enum TextureCompression: String, CaseIterable {
+    case none
+    case astc4x4
+    case astc6x6
+    case astc8x8
+    case bc7
+
+    var displayName: String {
+        switch self {
+        case .none:    return "None (Uncompressed)"
+        case .astc4x4: return "ASTC 4×4 (Best Quality)"
+        case .astc6x6: return "ASTC 6×6 (Balanced)"
+        case .astc8x8: return "ASTC 8×8 (Smallest)"
+        case .bc7:     return "BC7 (Desktop)"
+        }
     }
 }

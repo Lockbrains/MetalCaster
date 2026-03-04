@@ -167,6 +167,19 @@ struct MetalCasterEditorApp: App {
                 .disabled(editorState == nil)
             }
 
+            CommandMenu("Tool") {
+                Button("Shader Canvas") {
+                    editorState?.showShaderCanvas = true
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(editorState == nil)
+
+                Button("SDF Canvas") {
+                    editorState?.showSDFCanvas = true
+                }
+                .disabled(editorState == nil)
+            }
+
             CommandMenu("AI") {
                 Button("AI Chat") {
                     editorState?.showAIChat.toggle()

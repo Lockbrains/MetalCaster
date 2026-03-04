@@ -7,4 +7,7 @@
    <FileRef
       location = "group:macOSShaderCanvas.xcodeproj">
    </FileRef>
+   <FileRef
+      location = "group:SDFCanvas.xcodeproj">
+   </FileRef>
 </Workspace>

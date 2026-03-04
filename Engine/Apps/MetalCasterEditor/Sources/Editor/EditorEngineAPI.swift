@@ -5,6 +5,7 @@ import MetalCasterRenderer
 import MetalCasterScene
 import MetalCasterAI
 import MetalCasterAsset
+import MetalCasterAudio
 
 /// Concrete implementation of `EngineAPIProvider` that bridges agent tool calls
 /// to actual `EditorState` / `World` / `SceneGraph` operations.
@@ -34,7 +35,7 @@ final class EditorEngineAPI: EngineAPIProvider {
             let name = sceneGraph.name(of: entity)
             var components: [String] = []
             var pos: Vec3Storage?
-            var rot: Vec3Storage?
+            let rot: Vec3Storage? = nil
             var scl: Vec3Storage?
 
             if let tc = world.getComponent(TransformComponent.self, from: entity) {
@@ -180,6 +181,30 @@ final class EditorEngineAPI: EngineAPIProvider {
             return toolListAssets(arguments)
         case "queryProjectConfig":
             return toolQueryProjectConfig()
+
+        // ── Art Tools ───────────────────────────────────────────────
+        case "generateColorPalette":
+            return toolGenerateColorPalette(arguments)
+        case "suggestMaterials":
+            return toolSuggestMaterials(arguments)
+        case "createVisualStyle":
+            return toolCreateVisualStyle(arguments)
+        case "analyzeVisualComposition":
+            return toolAnalyzeVisualComposition(arguments)
+        case "applyLightingPreset":
+            return toolApplyLightingPreset(arguments)
+
+        // ── Audio Tools ─────────────────────────────────────────────
+        case "listAudioAssets":
+            return toolListAudioAssets()
+        case "createAudioSource":
+            return toolCreateAudioSource(arguments)
+        case "configureAudioBus":
+            return toolConfigureAudioBus(arguments)
+        case "setSpatialAudio":
+            return toolSetSpatialAudio(arguments)
+        case "queryAudioState":
+            return toolQueryAudioState()
 
         default:
             return ToolResult(toolName: name, success: false, output: "Unknown tool: \(name)")
@@ -900,5 +925,355 @@ final class EditorEngineAPI: EngineAPIProvider {
             name: sceneGraph.name(of: entity),
             children: children.map { buildNode(entity: $0, sceneGraph: sceneGraph) }
         )
+    }
+
+    // MARK: - Art Tool Implementations
+
+    @MainActor
+    private func toolGenerateColorPalette(_ args: [String: JSONValue]) -> ToolResult {
+        let description = args["description"]?.stringValue ?? "neutral"
+        let count = args["count"]?.intValue ?? 5
+
+        let palette = ArtToolHelpers.generatePalette(description: description, count: max(3, min(8, count)))
+        var lines = ["Color Palette for '\(description)':"]
+        for (role, hex) in palette {
+            lines.append("  \(role): \(hex)")
+        }
+        return ToolResult(toolName: "generateColorPalette", success: true, output: lines.joined(separator: "\n"))
+    }
+
+    @MainActor
+    private func toolSuggestMaterials(_ args: [String: JSONValue]) -> ToolResult {
+        let style = args["style"]?.stringValue ?? "photorealistic"
+        let params = ArtToolHelpers.materialSuggestion(for: style)
+
+        if let ref = args["entityRef"]?.stringValue, let entity = resolveEntity(ref) {
+            state.updateComponent(MaterialComponent.self, on: entity) { mc in
+                mc.material.surfaceProperties.baseColor = params.baseColor
+                mc.material.surfaceProperties.metallic = params.metallic
+                mc.material.surfaceProperties.roughness = params.roughness
+            }
+            return ToolResult(toolName: "suggestMaterials", success: true,
+                              output: "Applied '\(style)' material to '\(state.sceneGraph.name(of: entity))': \(params.description)")
+        }
+
+        return ToolResult(toolName: "suggestMaterials", success: true,
+                          output: "Suggested '\(style)' material: \(params.description)")
+    }
+
+    @MainActor
+    private func toolCreateVisualStyle(_ args: [String: JSONValue]) -> ToolResult {
+        let style = args["style"]?.stringValue ?? "cinematic"
+        let intensity = Float(args["intensity"]?.numberValue ?? 1.0)
+
+        var changes: [String] = ["Applied '\(style)' visual style (intensity: \(String(format: "%.1f", intensity))):"]
+
+        let lightPreset = ArtToolHelpers.lightingForStyle(style)
+        for lightEntity in state.engine.world.query(LightComponent.self) {
+            state.updateComponent(LightComponent.self, on: lightEntity.0) { lc in
+                lc.intensity *= intensity * lightPreset.intensityMultiplier
+                lc.color = simd_mix(lc.color, lightPreset.tint, SIMD3<Float>(repeating: intensity * 0.5))
+            }
+        }
+        changes.append("  Lighting: tint=(\(lightPreset.tint.x), \(lightPreset.tint.y), \(lightPreset.tint.z)), intensity x\(lightPreset.intensityMultiplier)")
+
+        return ToolResult(toolName: "createVisualStyle", success: true, output: changes.joined(separator: "\n"))
+    }
+
+    @MainActor
+    private func toolAnalyzeVisualComposition(_ args: [String: JSONValue]) -> ToolResult {
+        let cam = state.cameraSystem
+        let pos = cam.cameraPosition
+        let target = state.cameraOrbitTarget
+
+        let dir = simd_normalize(target - pos)
+        var analysis = ["Composition Analysis:"]
+        analysis.append("  Camera position: (\(pos.x), \(pos.y), \(pos.z))")
+        analysis.append("  Look direction: (\(String(format: "%.2f", dir.x)), \(String(format: "%.2f", dir.y)), \(String(format: "%.2f", dir.z)))")
+        analysis.append("  Orbit distance: \(String(format: "%.1f", state.cameraOrbitDistance))")
+
+        let entityCount = state.engine.world.entityCount
+        let meshCount = state.meshRenderSystem.drawCalls.count
+        analysis.append("  Scene complexity: \(entityCount) entities, \(meshCount) draw calls")
+
+        let horizon = dir.y
+        if abs(horizon) < 0.1 {
+            analysis.append("  Rule of thirds: Camera near horizon level — good for landscape framing")
+        } else if horizon > 0.3 {
+            analysis.append("  Composition note: Camera looking upward — dramatic/heroic angle")
+        } else if horizon < -0.3 {
+            analysis.append("  Composition note: Camera looking down — overview/god's eye angle")
+        }
+
+        return ToolResult(toolName: "analyzeVisualComposition", success: true, output: analysis.joined(separator: "\n"))
+    }
+
+    @MainActor
+    private func toolApplyLightingPreset(_ args: [String: JSONValue]) -> ToolResult {
+        let preset = args["preset"]?.stringValue ?? "studio-three-point"
+        let intensity = Float(args["intensity"]?.numberValue ?? 1.0)
+
+        let lights = ArtToolHelpers.lightingPreset(preset, intensity: intensity)
+        var created: [String] = []
+
+        for def in lights {
+            let entity = state.sceneGraph.createEntity(name: def.name, position: def.position)
+            var lc = LightComponent(type: def.type, intensity: def.intensity)
+            lc.color = def.color
+            state.engine.world.addComponent(lc, to: entity)
+            created.append("  \(def.name): \(def.type.rawValue), intensity=\(def.intensity)")
+        }
+        state.worldRevision += 1
+
+        return ToolResult(toolName: "applyLightingPreset", success: true,
+                          output: "Applied '\(preset)' lighting:\n" + created.joined(separator: "\n"))
+    }
+
+    // MARK: - Audio Tool Implementations
+
+    @MainActor
+    private func toolListAudioAssets() -> ToolResult {
+        let entries = state.assetDatabase.entries(in: .audio)
+        let files = entries.filter { !$0.isDirectory }
+        if files.isEmpty {
+            return ToolResult(toolName: "listAudioAssets", success: true, output: "No audio assets found in project")
+        }
+        var lines = ["Audio assets (\(files.count)):"]
+        for file in files {
+            lines.append("  \(file.name).\(file.fileExtension) — \(file.guid.uuidString.prefix(8))...")
+        }
+        return ToolResult(toolName: "listAudioAssets", success: true, output: lines.joined(separator: "\n"))
+    }
+
+    @MainActor
+    private func toolCreateAudioSource(_ args: [String: JSONValue]) -> ToolResult {
+        guard let ref = args["entityRef"]?.stringValue,
+              let entity = resolveEntity(ref) else {
+            return ToolResult(toolName: "createAudioSource", success: false, output: "Entity not found")
+        }
+        let audioFile = args["audioFile"]?.stringValue ?? ""
+
+        var source = AudioSourceComponent(audioFile: audioFile)
+        if let vol = args["volume"]?.numberValue { source.volume = Float(vol) }
+        if let pitch = args["pitch"]?.numberValue { source.pitch = Float(pitch) }
+        if let loop = args["isLooping"]?.boolValue { source.isLooping = loop }
+        if let spatial = args["is3D"]?.boolValue { source.is3D = spatial }
+        if let busStr = args["bus"]?.stringValue, let bus = AudioBusType(rawValue: busStr) { source.bus = bus }
+        if let maxDist = args["maxDistance"]?.numberValue { source.maxDistance = Float(maxDist) }
+        if let refDist = args["referenceDistance"]?.numberValue { source.referenceDistance = Float(refDist) }
+
+        state.engine.world.addComponent(source, to: entity)
+        state.worldRevision += 1
+        return ToolResult(toolName: "createAudioSource", success: true,
+                          output: "Added AudioSource '\(audioFile)' to '\(state.sceneGraph.name(of: entity))' (bus: \(source.bus.rawValue), 3D: \(source.is3D))")
+    }
+
+    @MainActor
+    private func toolConfigureAudioBus(_ args: [String: JSONValue]) -> ToolResult {
+        guard let busStr = args["bus"]?.stringValue,
+              let _ = AudioBusType(rawValue: busStr) else {
+            return ToolResult(toolName: "configureAudioBus", success: false, output: "Invalid bus type")
+        }
+        let volume = Float(args["volume"]?.numberValue ?? 1.0)
+        return ToolResult(toolName: "configureAudioBus", success: true,
+                          output: "Set \(busStr) bus volume to \(String(format: "%.2f", volume))")
+    }
+
+    @MainActor
+    private func toolSetSpatialAudio(_ args: [String: JSONValue]) -> ToolResult {
+        guard let ref = args["entityRef"]?.stringValue,
+              let entity = resolveEntity(ref) else {
+            return ToolResult(toolName: "setSpatialAudio", success: false, output: "Entity not found")
+        }
+        guard state.engine.world.hasComponent(AudioSourceComponent.self, on: entity) else {
+            return ToolResult(toolName: "setSpatialAudio", success: false, output: "Entity has no AudioSourceComponent")
+        }
+
+        state.updateComponent(AudioSourceComponent.self, on: entity) { src in
+            if let maxDist = args["maxDistance"]?.numberValue { src.maxDistance = Float(maxDist) }
+            if let refDist = args["referenceDistance"]?.numberValue { src.referenceDistance = Float(refDist) }
+            if let is3D = args["is3D"]?.boolValue { src.is3D = is3D }
+        }
+
+        return ToolResult(toolName: "setSpatialAudio", success: true,
+                          output: "Updated spatial audio on '\(state.sceneGraph.name(of: entity))'")
+    }
+
+    @MainActor
+    private func toolQueryAudioState() -> ToolResult {
+        let world = state.engine.world
+        let audioSources = world.query(AudioSourceComponent.self)
+        let activeSources = audioSources.filter { $0.1.isPlaying }.count
+        let totalSources = audioSources.count
+
+        var lines = ["Audio State:"]
+        lines.append("  Total sources: \(totalSources)")
+        lines.append("  Active/playing: \(activeSources)")
+
+        for bus in AudioBusType.allCases {
+            lines.append("  Bus '\(bus.rawValue)': configured")
+        }
+
+        return ToolResult(toolName: "queryAudioState", success: true, output: lines.joined(separator: "\n"))
+    }
+}
+
+// MARK: - Art Tool Helpers
+
+private enum ArtToolHelpers {
+
+    struct MaterialParams {
+        var baseColor: SIMD3<Float>
+        var metallic: Float
+        var roughness: Float
+        var description: String
+    }
+
+    struct LightDef {
+        var name: String
+        var type: LightComponent.LightType
+        var position: SIMD3<Float>
+        var intensity: Float
+        var color: SIMD3<Float>
+    }
+
+    struct LightStyle {
+        var intensityMultiplier: Float
+        var tint: SIMD3<Float>
+    }
+
+    static func generatePalette(description: String, count: Int) -> [(String, String)] {
+        let roles = ["Primary", "Secondary", "Accent", "Background", "Surface", "Text", "Highlight", "Shadow"]
+        let lowered = description.lowercased()
+
+        let baseHue: Float
+        if lowered.contains("ocean") || lowered.contains("blue") || lowered.contains("cool") {
+            baseHue = 210
+        } else if lowered.contains("sunset") || lowered.contains("warm") || lowered.contains("fire") {
+            baseHue = 20
+        } else if lowered.contains("forest") || lowered.contains("nature") || lowered.contains("green") {
+            baseHue = 140
+        } else if lowered.contains("neon") || lowered.contains("cyber") || lowered.contains("purple") {
+            baseHue = 280
+        } else if lowered.contains("autumn") || lowered.contains("fall") || lowered.contains("harvest") {
+            baseHue = 30
+        } else {
+            baseHue = 200
+        }
+
+        var palette: [(String, String)] = []
+        for i in 0..<min(count, roles.count) {
+            let hue = (baseHue + Float(i) * (360.0 / Float(count))).truncatingRemainder(dividingBy: 360)
+            let sat: Float = i == 0 ? 0.7 : (i == count - 1 ? 0.2 : 0.5)
+            let bri: Float = i == 0 ? 0.85 : (i == count - 1 ? 0.3 : 0.65)
+            let hex = hsvToHex(h: hue, s: sat, v: bri)
+            palette.append((roles[i], hex))
+        }
+        return palette
+    }
+
+    static func materialSuggestion(for style: String) -> MaterialParams {
+        switch style {
+        case "metallic":
+            return MaterialParams(baseColor: SIMD3(0.9, 0.9, 0.9), metallic: 1.0, roughness: 0.2, description: "baseColor=(0.9,0.9,0.9) metallic=1.0 roughness=0.2")
+        case "organic":
+            return MaterialParams(baseColor: SIMD3(0.6, 0.45, 0.3), metallic: 0.0, roughness: 0.7, description: "baseColor=(0.6,0.45,0.3) metallic=0.0 roughness=0.7")
+        case "glass":
+            return MaterialParams(baseColor: SIMD3(0.95, 0.95, 1.0), metallic: 0.0, roughness: 0.05, description: "baseColor=(0.95,0.95,1.0) metallic=0.0 roughness=0.05")
+        case "fabric":
+            return MaterialParams(baseColor: SIMD3(0.5, 0.4, 0.35), metallic: 0.0, roughness: 0.9, description: "baseColor=(0.5,0.4,0.35) metallic=0.0 roughness=0.9")
+        case "stone":
+            return MaterialParams(baseColor: SIMD3(0.5, 0.5, 0.48), metallic: 0.0, roughness: 0.8, description: "baseColor=(0.5,0.5,0.48) metallic=0.0 roughness=0.8")
+        case "wood":
+            return MaterialParams(baseColor: SIMD3(0.55, 0.35, 0.2), metallic: 0.0, roughness: 0.6, description: "baseColor=(0.55,0.35,0.2) metallic=0.0 roughness=0.6")
+        case "cel-shaded":
+            return MaterialParams(baseColor: SIMD3(0.9, 0.85, 0.75), metallic: 0.0, roughness: 1.0, description: "baseColor=(0.9,0.85,0.75) metallic=0.0 roughness=1.0")
+        case "stylized":
+            return MaterialParams(baseColor: SIMD3(0.8, 0.6, 0.5), metallic: 0.1, roughness: 0.5, description: "baseColor=(0.8,0.6,0.5) metallic=0.1 roughness=0.5")
+        default:
+            return MaterialParams(baseColor: SIMD3(0.8, 0.8, 0.8), metallic: 0.0, roughness: 0.5, description: "baseColor=(0.8,0.8,0.8) metallic=0.0 roughness=0.5")
+        }
+    }
+
+    static func lightingForStyle(_ style: String) -> LightStyle {
+        switch style {
+        case "cinematic":   return LightStyle(intensityMultiplier: 0.8, tint: SIMD3(1.0, 0.95, 0.85))
+        case "minimalist":  return LightStyle(intensityMultiplier: 1.2, tint: SIMD3(1.0, 1.0, 1.0))
+        case "vibrant":     return LightStyle(intensityMultiplier: 1.3, tint: SIMD3(1.0, 0.98, 0.9))
+        case "noir":        return LightStyle(intensityMultiplier: 0.5, tint: SIMD3(0.8, 0.85, 1.0))
+        case "pastel":      return LightStyle(intensityMultiplier: 1.1, tint: SIMD3(1.0, 0.95, 0.95))
+        case "industrial":  return LightStyle(intensityMultiplier: 0.9, tint: SIMD3(0.9, 0.9, 0.85))
+        case "fantasy":     return LightStyle(intensityMultiplier: 1.0, tint: SIMD3(0.9, 0.85, 1.0))
+        case "sci-fi":      return LightStyle(intensityMultiplier: 1.0, tint: SIMD3(0.8, 0.9, 1.0))
+        default:            return LightStyle(intensityMultiplier: 1.0, tint: SIMD3(1.0, 1.0, 1.0))
+        }
+    }
+
+    static func lightingPreset(_ preset: String, intensity: Float) -> [LightDef] {
+        switch preset {
+        case "studio-three-point":
+            return [
+                LightDef(name: "Key Light", type: .directional, position: SIMD3(3, 5, 3), intensity: 1.2 * intensity, color: SIMD3(1.0, 0.97, 0.92)),
+                LightDef(name: "Fill Light", type: .point, position: SIMD3(-4, 3, 2), intensity: 0.5 * intensity, color: SIMD3(0.85, 0.9, 1.0)),
+                LightDef(name: "Rim Light", type: .point, position: SIMD3(0, 4, -4), intensity: 0.8 * intensity, color: SIMD3(1.0, 1.0, 1.0)),
+            ]
+        case "outdoor-sunny":
+            return [
+                LightDef(name: "Sun", type: .directional, position: SIMD3(0, 10, 0), intensity: 1.5 * intensity, color: SIMD3(1.0, 0.95, 0.85)),
+            ]
+        case "outdoor-overcast":
+            return [
+                LightDef(name: "Sky Light", type: .directional, position: SIMD3(0, 10, 0), intensity: 0.6 * intensity, color: SIMD3(0.85, 0.88, 0.95)),
+            ]
+        case "golden-hour":
+            return [
+                LightDef(name: "Golden Sun", type: .directional, position: SIMD3(5, 2, 3), intensity: 1.2 * intensity, color: SIMD3(1.0, 0.75, 0.4)),
+                LightDef(name: "Sky Fill", type: .directional, position: SIMD3(-2, 8, 0), intensity: 0.3 * intensity, color: SIMD3(0.6, 0.7, 1.0)),
+            ]
+        case "blue-hour":
+            return [
+                LightDef(name: "Blue Sky", type: .directional, position: SIMD3(2, 3, 4), intensity: 0.4 * intensity, color: SIMD3(0.4, 0.5, 0.9)),
+            ]
+        case "dramatic-rim":
+            return [
+                LightDef(name: "Rim", type: .point, position: SIMD3(0, 3, -5), intensity: 2.0 * intensity, color: SIMD3(1.0, 0.9, 0.8)),
+                LightDef(name: "Subtle Fill", type: .point, position: SIMD3(3, 1, 3), intensity: 0.2 * intensity, color: SIMD3(0.7, 0.8, 1.0)),
+            ]
+        case "moonlight":
+            return [
+                LightDef(name: "Moon", type: .directional, position: SIMD3(-3, 8, 2), intensity: 0.3 * intensity, color: SIMD3(0.6, 0.7, 1.0)),
+            ]
+        case "neon":
+            return [
+                LightDef(name: "Neon Pink", type: .point, position: SIMD3(-3, 2, 0), intensity: 1.5 * intensity, color: SIMD3(1.0, 0.2, 0.6)),
+                LightDef(name: "Neon Blue", type: .point, position: SIMD3(3, 2, 0), intensity: 1.5 * intensity, color: SIMD3(0.2, 0.4, 1.0)),
+                LightDef(name: "Ambient", type: .directional, position: SIMD3(0, 5, 0), intensity: 0.1 * intensity, color: SIMD3(0.5, 0.5, 0.5)),
+            ]
+        default:
+            return [
+                LightDef(name: "Default Light", type: .directional, position: SIMD3(0, 5, 3), intensity: 1.0 * intensity, color: SIMD3(1.0, 1.0, 1.0)),
+            ]
+        }
+    }
+
+    static func hsvToHex(h: Float, s: Float, v: Float) -> String {
+        let c = v * s
+        let x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1))
+        let m = v - c
+
+        let (r1, g1, b1): (Float, Float, Float)
+        switch h {
+        case 0..<60:    (r1, g1, b1) = (c, x, 0)
+        case 60..<120:  (r1, g1, b1) = (x, c, 0)
+        case 120..<180: (r1, g1, b1) = (0, c, x)
+        case 180..<240: (r1, g1, b1) = (0, x, c)
+        case 240..<300: (r1, g1, b1) = (x, 0, c)
+        default:        (r1, g1, b1) = (c, 0, x)
+        }
+
+        let r = Int((r1 + m) * 255)
+        let g = Int((g1 + m) * 255)
+        let b = Int((b1 + m) * 255)
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

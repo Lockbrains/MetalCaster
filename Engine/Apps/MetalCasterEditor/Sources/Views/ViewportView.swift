@@ -17,68 +17,12 @@ struct SceneEditorView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ZStack(alignment: .topTrailing) {
-                ZStack(alignment: .top) {
-                    EditorMetalView(viewportID: 0, state: state)
-                    playToolbar
-                }
+                EditorMetalView(viewportID: 0, state: state)
                 statsOverlay
             }
             SceneOverlayPanel()
         }
         .background(Color.black)
-    }
-
-    private var playToolbar: some View {
-        HStack(spacing: 8) {
-            Button {
-                state.playInEditor()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: state.buildSystem.isPlaying ? "stop.fill" : "play.fill")
-                        .font(.system(size: 10))
-                    Text(state.buildSystem.isPlaying ? "Stop" : "Play")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundStyle(state.buildSystem.isPlaying ? .red : .green)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.white.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut("r")
-
-            if case .building(let stage, _) = state.buildSystem.status {
-                HStack(spacing: 4) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text(stage)
-                        .font(.system(size: 10))
-                        .foregroundStyle(MCTheme.textSecondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-            }
-
-            if case .failed(let error) = state.buildSystem.status {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                        .font(.system(size: 10))
-                    Text("Build Failed")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.red)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .help(error)
-            }
-        }
-        .padding(.top, 8)
     }
 
     private var statsOverlay: some View {

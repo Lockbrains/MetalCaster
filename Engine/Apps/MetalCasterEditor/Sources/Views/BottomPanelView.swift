@@ -2,6 +2,11 @@ import SwiftUI
 import MetalCasterCore
 import MetalCasterAsset
 import UniformTypeIdentifiers
+#if canImport(AppKit)
+import AppKit
+import ImageIO
+import CoreGraphics
+#endif
 
 // MARK: - Project Assets Browser
 
@@ -188,13 +193,34 @@ struct ProjectAssetsView: View {
             } else {
                 breadcrumbBar
                 Divider().background(MCTheme.panelBorder)
-                assetListView
+                if state.assetViewMode == .grid {
+                    assetGridView
+                } else {
+                    assetListView
+                }
             }
 
             Spacer(minLength: 0)
 
             Divider().background(MCTheme.panelBorder)
             bottomStatusBar
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .onKeyPress(.return) {
+            if state.renamingAssetGUID == nil,
+               let selected = state.selectedAssetEntry {
+                state.renamingAssetGUID = selected.guid
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.escape) {
+            if state.renamingAssetGUID != nil {
+                state.renamingAssetGUID = nil
+                return .handled
+            }
+            return .ignored
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -380,6 +406,31 @@ struct ProjectAssetsView: View {
         }
     }
 
+    // MARK: - Asset Grid
+
+    private var assetGridView: some View {
+        let _ = state.assetBrowserRevision
+        let entries = state.assetDatabase.entries(
+            in: state.selectedAssetCategory,
+            subfolder: state.assetBrowserSubfolder
+        ).filter { !Self.hiddenExtensions.contains($0.fileExtension.lowercased()) }
+
+        let columns = [GridItem(.adaptive(minimum: 80, maximum: 100), spacing: 8)]
+
+        return ScrollView {
+            if entries.isEmpty {
+                emptyStateView
+            } else {
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(entries) { entry in
+                        AssetGridCell(entry: entry)
+                    }
+                }
+                .padding(8)
+            }
+        }
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 8) {
             Spacer()
@@ -477,11 +528,15 @@ struct ProjectAssetsView: View {
 struct AssetListRow: View {
     let entry: AssetEntry
     @Environment(EditorState.self) private var state
-    @State private var isRenaming = false
     @State private var renameText = ""
     @State private var lastClickTime: Date = .distantPast
+    @FocusState private var renameFieldFocused: Bool
+    @State private var isDropTarget = false
 
     private static let doubleClickInterval: TimeInterval = 0.3
+    private static let inspectableExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
+
+    private var isRenaming: Bool { state.renamingAssetGUID == entry.guid }
 
     var body: some View {
         let isSelected = state.selectedAssetEntry?.guid == entry.guid
@@ -494,7 +549,8 @@ struct AssetListRow: View {
                     handleDoubleClick()
                 } else {
                     lastClickTime = now
-                    if entry.fileExtension == "mcmat" {
+                    let ext = entry.fileExtension.lowercased()
+                    if ext == "mcmat" || Self.inspectableExtensions.contains(ext) {
                         state.selectedEntity = nil
                     }
                     state.selectedAssetEntry = entry
@@ -502,6 +558,17 @@ struct AssetListRow: View {
             }
             .contextMenu {
                 assetContextMenu
+            }
+            .conditionalDropTarget(isFolder: entry.isDirectory, isDropTarget: $isDropTarget) { guids in
+                handleAssetDrop(guids)
+            }
+            .onChange(of: state.renamingAssetGUID) { _, newVal in
+                if newVal == entry.guid {
+                    renameText = entry.name
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        renameFieldFocused = true
+                    }
+                }
             }
     }
 
@@ -518,12 +585,12 @@ struct AssetListRow: View {
                     .frame(width: 16)
 
                 if isRenaming {
-                    TextField("", text: $renameText, onCommit: {
+                    RenameField(text: $renameText, isFocused: $renameFieldFocused) {
                         commitRename()
-                    })
-                    .textFieldStyle(.plain)
-                    .font(MCTheme.fontCaption)
-                    .foregroundStyle(MCTheme.textPrimary)
+                    }
+                    .onChange(of: renameFieldFocused) { _, focused in
+                        if !focused { commitRename() }
+                    }
                 } else {
                     Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
                         .font(MCTheme.fontCaption)
@@ -549,7 +616,14 @@ struct AssetListRow: View {
                 promptSubordinateRow
             }
         }
-        .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
+        .background(
+            RoundedRectangle(cornerRadius: 3)
+                .fill(isDropTarget ? MCTheme.statusBlue.opacity(0.25) : (isSelected ? MCTheme.surfaceSelected : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 3)
+                .stroke(isDropTarget ? MCTheme.statusBlue : Color.clear, lineWidth: 1)
+        )
         .contentShape(Rectangle())
         .draggable(entry.guid.uuidString)
     }
@@ -659,8 +733,7 @@ struct AssetListRow: View {
         Divider()
 
         Button {
-            isRenaming = true
-            renameText = entry.name
+            beginRename()
         } label: {
             Label("Rename", systemImage: "pencil")
         }
@@ -751,10 +824,35 @@ struct AssetListRow: View {
     }
     #endif
 
+    private func beginRename() {
+        state.renamingAssetGUID = entry.guid
+    }
+
     private func commitRename() {
-        isRenaming = false
+        guard isRenaming else { return }
+        state.renamingAssetGUID = nil
+        renameFieldFocused = false
         guard !renameText.isEmpty, renameText != entry.name else { return }
         _ = try? state.assetDatabase.renameAsset(entry: entry, newName: renameText)
+        state.refreshAssetBrowser()
+    }
+
+    private func handleAssetDrop(_ guidStrings: [String]) {
+        let allEntries = state.assetDatabase.entries(
+            in: state.selectedAssetCategory,
+            subfolder: state.assetBrowserSubfolder
+        )
+        for guidStr in guidStrings {
+            guard let guid = UUID(uuidString: guidStr) else { continue }
+            guard guid != entry.guid else { continue }
+            if let movingEntry = allEntries.first(where: { $0.guid == guid }),
+               !movingEntry.isDirectory {
+                try? state.assetDatabase.moveAsset(
+                    entry: movingEntry,
+                    toFolderRelativePath: entry.relativePath
+                )
+            }
+        }
         state.refreshAssetBrowser()
     }
 
@@ -807,5 +905,331 @@ struct AssetListRow: View {
         if mb < 1024 { return String(format: "%.1f MB", mb) }
         let gb = mb / 1024
         return String(format: "%.1f GB", gb)
+    }
+}
+
+// MARK: - Asset Grid Cell
+
+struct AssetGridCell: View {
+    let entry: AssetEntry
+    @Environment(EditorState.self) private var state
+    @State private var thumbnail: NSImage?
+    @State private var lastClickTime: Date = .distantPast
+    @State private var renameText = ""
+    @FocusState private var renameFieldFocused: Bool
+    @State private var isDropTarget = false
+
+    private static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
+    private static let doubleClickInterval: TimeInterval = 0.3
+    private static let inspectableExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
+
+    private var isRenaming: Bool { state.renamingAssetGUID == entry.guid }
+
+    var body: some View {
+        let isSelected = state.selectedAssetEntry?.guid == entry.guid
+
+        VStack(spacing: 4) {
+            thumbnailView
+                .frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(isSelected ? MCTheme.statusBlue : Color.clear, lineWidth: 2)
+                )
+
+            if isRenaming {
+                RenameField(text: $renameText, isFocused: $renameFieldFocused) {
+                    commitRename()
+                }
+                .frame(width: 80, height: 14)
+                .onChange(of: renameFieldFocused) { _, focused in
+                    if !focused { commitRename() }
+                }
+            } else {
+                Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
+                    .font(.system(size: 9))
+                    .foregroundStyle(MCTheme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 80)
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isDropTarget ? MCTheme.statusBlue.opacity(0.25) : (isSelected ? MCTheme.surfaceSelected : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isDropTarget ? MCTheme.statusBlue : Color.clear, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .draggable(entry.guid.uuidString)
+        .onTapGesture {
+            let now = Date()
+            if now.timeIntervalSince(lastClickTime) < Self.doubleClickInterval {
+                lastClickTime = .distantPast
+                if entry.isDirectory {
+                    state.assetBrowserSubfolder = (state.assetBrowserSubfolder ?? "")
+                        .appending(entry.name + "/")
+                }
+            } else {
+                lastClickTime = now
+                let ext = entry.fileExtension.lowercased()
+                if ext == "mcmat" || Self.inspectableExtensions.contains(ext) {
+                    state.selectedEntity = nil
+                }
+                state.selectedAssetEntry = entry
+            }
+        }
+        .contextMenu {
+            gridContextMenu
+        }
+        .conditionalDropTarget(isFolder: entry.isDirectory, isDropTarget: $isDropTarget) { guids in
+            handleAssetDrop(guids)
+        }
+        .onChange(of: state.renamingAssetGUID) { _, newVal in
+            if newVal == entry.guid {
+                renameText = entry.name
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    renameFieldFocused = true
+                }
+            }
+        }
+        .onAppear { loadThumbnail() }
+    }
+
+    @ViewBuilder
+    private var gridContextMenu: some View {
+        if entry.isDirectory {
+            Button {
+                state.enterAssetSubfolder(entry.name)
+            } label: {
+                Label("Open", systemImage: "folder")
+            }
+        }
+
+        Divider()
+
+        Button {
+            beginRename()
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+
+        Button(role: .destructive) {
+            try? state.assetDatabase.deleteAsset(entry: entry)
+            if state.selectedAssetEntry?.guid == entry.guid {
+                state.selectedAssetEntry = nil
+            }
+            state.refreshAssetBrowser()
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+
+        if !entry.isDirectory {
+            Divider()
+            Button {
+                #if os(macOS)
+                if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+                #endif
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
+            }
+        }
+    }
+
+    private func beginRename() {
+        state.renamingAssetGUID = entry.guid
+    }
+
+    private func commitRename() {
+        guard isRenaming else { return }
+        state.renamingAssetGUID = nil
+        renameFieldFocused = false
+        guard !renameText.isEmpty, renameText != entry.name else { return }
+        _ = try? state.assetDatabase.renameAsset(entry: entry, newName: renameText)
+        state.refreshAssetBrowser()
+    }
+
+    private func handleAssetDrop(_ guidStrings: [String]) {
+        let allEntries = state.assetDatabase.entries(
+            in: state.selectedAssetCategory,
+            subfolder: state.assetBrowserSubfolder
+        )
+        for guidStr in guidStrings {
+            guard let guid = UUID(uuidString: guidStr) else { continue }
+            guard guid != entry.guid else { continue }
+            if let movingEntry = allEntries.first(where: { $0.guid == guid }),
+               !movingEntry.isDirectory {
+                try? state.assetDatabase.moveAsset(
+                    entry: movingEntry,
+                    toFolderRelativePath: entry.relativePath
+                )
+            }
+        }
+        state.refreshAssetBrowser()
+    }
+
+    @ViewBuilder
+    private var thumbnailView: some View {
+        if entry.isDirectory {
+            ZStack {
+                Color.white.opacity(0.04)
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(MCTheme.statusBlue)
+            }
+        } else if let thumb = thumbnail {
+            Image(nsImage: thumb)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            ZStack {
+                Color.white.opacity(0.04)
+                Image(systemName: iconForExtension)
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+        }
+    }
+
+    private var iconForExtension: String {
+        switch entry.fileExtension.lowercased() {
+        case "mcscene", "usda", "usdz", "usd", "usdc": return "film"
+        case "obj": return "cube"
+        case "png", "jpg", "jpeg", "tiff", "exr", "hdr": return "photo"
+        case "mcmat": return "paintpalette"
+        case "metal": return "function"
+        case "wav", "mp3", "aac", "m4a", "ogg": return "speaker.wave.2"
+        case "mcprefab": return "square.on.square"
+        case "swift": return "swift"
+        case "prompt": return "text.bubble"
+        default: return "doc"
+        }
+    }
+
+    private func loadThumbnail() {
+        guard !entry.isDirectory else { return }
+        let ext = entry.fileExtension.lowercased()
+        guard Self.imageExtensions.contains(ext) else { return }
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return }
+
+        DispatchQueue.global(qos: .utility).async {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 128,
+                kCGImageSourceCreateThumbnailWithTransform: true
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return }
+            let nsImg = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            DispatchQueue.main.async {
+                self.thumbnail = nsImg
+            }
+        }
+    }
+}
+
+// MARK: - RenameField
+
+/// NSTextField wrapper that auto-selects all text on focus and commits on Return/blur.
+#if canImport(AppKit)
+struct RenameField: NSViewRepresentable {
+    @Binding var text: String
+    var isFocused: FocusState<Bool>.Binding
+    var onCommit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.font = .systemFont(ofSize: 11)
+        field.textColor = .white
+        field.focusRingType = .none
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.cell?.lineBreakMode = .byClipping
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        context.coordinator.onTextChange = { self.text = $0 }
+        context.coordinator.onCommit = self.onCommit
+        context.coordinator.setFocused = { self.isFocused.wrappedValue = $0 }
+
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+        if isFocused.wrappedValue && nsView.window?.firstResponder != nsView.currentEditor() {
+            nsView.becomeFirstResponder()
+            nsView.selectText(nil)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var onTextChange: ((String) -> Void)?
+        var onCommit: (() -> Void)?
+        var setFocused: ((Bool) -> Void)?
+        private var didCommit = false
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            onTextChange?(field.stringValue)
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            guard !didCommit else { return }
+            didCommit = true
+            onCommit?()
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                didCommit = true
+                onCommit?()
+                DispatchQueue.main.async { [weak self] in self?.didCommit = false }
+                return true
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                didCommit = true
+                setFocused?(false)
+                onCommit?()
+                DispatchQueue.main.async { [weak self] in self?.didCommit = false }
+                return true
+            }
+            return false
+        }
+    }
+}
+#endif
+
+// MARK: - Conditional Drop Target
+
+extension View {
+    @ViewBuilder
+    func conditionalDropTarget(
+        isFolder: Bool,
+        isDropTarget: Binding<Bool>,
+        onDrop: @escaping ([String]) -> Void
+    ) -> some View {
+        if isFolder {
+            self.dropDestination(for: String.self) { items, _ in
+                let validGuids = items.filter { UUID(uuidString: $0) != nil }
+                guard !validGuids.isEmpty else { return false }
+                onDrop(validGuids)
+                return true
+            } isTargeted: { targeted in
+                isDropTarget.wrappedValue = targeted
+            }
+        } else {
+            self
+        }
     }
 }

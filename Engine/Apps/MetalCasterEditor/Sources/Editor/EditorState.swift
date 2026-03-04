@@ -5,6 +5,7 @@ import MetalCasterRenderer
 import MetalCasterScene
 import MetalCasterAI
 import MetalCasterAsset
+import MetalCasterAudio
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -34,9 +35,22 @@ public final class EditorState {
     public let skyboxSystem = SkyboxSystem()
     public let postProcessVolumeSystem = PostProcessVolumeSystem()
 
+    // MARK: - Audio
+
+    public let audioEngine = MCAudioEngine()
+    public let audioSystem: AudioSystem
+
     // MARK: - Selection
 
     public var selectedEntity: Entity? = nil
+
+    // MARK: - Inline Rename
+
+    /// Set to a non-nil GUID to trigger rename mode on that asset row.
+    public var renamingAssetGUID: UUID? = nil
+
+    /// Set to a non-nil entity to trigger rename mode on that entity row.
+    public var renamingEntityID: Entity? = nil
 
     /// Incremented whenever the ECS World is mutated.
     /// Inspector and other views read this to force SwiftUI re-evaluation.
@@ -134,6 +148,8 @@ public final class EditorState {
     public var showImportPanel = false
     public var showAIChat = false
     public var showAISettings = false
+    public var showShaderCanvas = false
+    public var showSDFCanvas = false
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
@@ -193,6 +209,11 @@ public final class EditorState {
     public var showXcodeIntegrationPrompt: Bool = false
     public var xcodeIntegrationError: String? = nil
     public var editingPromptURL: URL? = nil
+
+    // MARK: - Version Control
+
+    public var gitClient: MCGitClient?
+    public var showVersionControl: Bool = false
 
     // MARK: - Scene Editor Tool Mode (QWER)
 
@@ -331,6 +352,7 @@ public final class EditorState {
         self.sceneGraph = SceneGraph(world: engine.world)
         self.orchestrator = AgentOrchestrator(registry: agentRegistry)
         self.assetDatabase = AssetDatabase(projectManager: projectManager)
+        self.audioSystem = AudioSystem(audioEngine: audioEngine)
 
         engine.addSystem(transformSystem)
         engine.addSystem(cameraSystem)
@@ -338,6 +360,20 @@ public final class EditorState {
         engine.addSystem(skyboxSystem)
         engine.addSystem(postProcessVolumeSystem)
         engine.addSystem(meshRenderSystem)
+        engine.addSystem(audioSystem)
+
+        try? audioEngine.start()
+
+        audioSystem.resolveAudioFile = { [weak self] filename in
+            guard let self else { return nil }
+            let entries = self.assetDatabase.allFiles(in: .audio)
+            if let match = entries.first(where: {
+                "\($0.name).\($0.fileExtension)" == filename
+            }) {
+                return self.assetDatabase.resolveURL(for: match.guid)
+            }
+            return nil
+        }
 
         setupDefaultScene()
         engine.start()
@@ -365,6 +401,7 @@ public final class EditorState {
             let name = projectURL.deletingPathExtension().lastPathComponent
             try? projectManager.createProject(at: projectURL, name: name)
         }
+        gitClient = MCGitClient(workingDirectory: projectURL)
     }
 
     // MARK: - Scene Setup

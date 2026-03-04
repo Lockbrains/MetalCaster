@@ -397,6 +397,35 @@ public final class ProjectManager: @unchecked Sendable {
         return newRelativePath
     }
 
+    /// Moves an asset file from its current directory into a different folder within the same category.
+    public func moveAsset(relativePath: String, toFolder folderRelativePath: String) throws -> String {
+        guard let root = projectRoot else { throw ProjectError.noProjectOpen }
+        let fm = FileManager.default
+        let sourceURL = root.appendingPathComponent(relativePath)
+        let destDir = root.appendingPathComponent(folderRelativePath)
+
+        if !fm.fileExists(atPath: destDir.path) {
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        }
+
+        let destURL = destDir.appendingPathComponent(sourceURL.lastPathComponent)
+        try fm.moveItem(at: sourceURL, to: destURL)
+
+        let oldMetaURL = URL(fileURLWithPath: sourceURL.path + ".meta")
+        let newMetaURL = URL(fileURLWithPath: destURL.path + ".meta")
+        if fm.fileExists(atPath: oldMetaURL.path) {
+            try fm.moveItem(at: oldMetaURL, to: newMetaURL)
+        }
+
+        let newRelativePath = self.relativePath(for: destURL, from: root) ?? destURL.lastPathComponent
+        if let guid = pathToGuid.removeValue(forKey: relativePath) {
+            guidToPath[guid] = newRelativePath
+            pathToGuid[newRelativePath] = guid
+        }
+
+        return newRelativePath
+    }
+
     // MARK: - Scanning
 
     public func scanMetafiles() {

@@ -8,6 +8,8 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
     case asset    = "Asset"
     case optimize = "Optimize"
     case analyze  = "Analyze"
+    case art      = "Art"
+    case audio    = "Audio"
 
     public var id: String { rawValue }
 
@@ -19,6 +21,8 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .asset:    return "Asset"
         case .optimize: return "Optimize"
         case .analyze:  return "Analyze"
+        case .art:      return "Art"
+        case .audio:    return "Audio"
         }
     }
 
@@ -30,6 +34,8 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .asset:    return "folder"
         case .optimize: return "gauge.with.dots.needle.67percent"
         case .analyze:  return "waveform.path.ecg"
+        case .art:      return "paintpalette"
+        case .audio:    return "speaker.wave.3"
         }
     }
 
@@ -41,6 +47,8 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .asset:    return "Asset pipeline, import/export, bundling"
         case .optimize: return "Performance profiling, GPU analysis"
         case .analyze:  return "Scene diagnostics, error detection"
+        case .art:      return "Visual style, color palettes, composition"
+        case .audio:    return "Spatial audio, buses, sound design"
         }
     }
 }

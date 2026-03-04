@@ -38,6 +38,8 @@ public final class Engine: @unchecked Sendable {
         self.world = World()
         self.events = EventBus()
         self.input = InputManager()
+        MCLog.shared.eventBus = events
+        MCProfiler.shared.eventBus = events
     }
 
     // MARK: - System Management
@@ -70,6 +72,9 @@ public final class Engine: @unchecked Sendable {
         self.deltaTime = dt
         self.totalTime += dt
         self.frameCount += 1
+        MCLog.shared.currentFrameCount = frameCount
+
+        MCProfiler.shared.beginFrame(frameNumber: frameCount)
 
         let context = UpdateContext(
             world: world,
@@ -84,12 +89,21 @@ public final class Engine: @unchecked Sendable {
             engine: self
         )
 
+        let profiling = MCProfiler.shared.isEnabled
         for system in systems where system.isEnabled {
-            system.update(context: context)
+            if profiling {
+                let start = CFAbsoluteTimeGetCurrent()
+                system.update(context: context)
+                let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000.0
+                MCProfiler.shared.recordSystem(name: String(describing: type(of: system)), timeMs: elapsed)
+            } else {
+                system.update(context: context)
+            }
         }
 
         input.endFrame()
         events.flush()
+        MCProfiler.shared.endFrame(deltaTime: dt)
     }
 
     /// Starts the engine. Call before the first tick.
@@ -97,10 +111,12 @@ public final class Engine: @unchecked Sendable {
         isRunning = true
         totalTime = 0
         frameCount = 0
+        MCLog.info(.core, "Engine started")
     }
 
     /// Stops the engine and tears down all systems.
     public func stop() {
+        MCLog.info(.core, "Engine stopping")
         isRunning = false
         for system in systems {
             system.teardown(world: world)

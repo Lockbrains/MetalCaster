@@ -64,4 +64,24 @@ public enum AgentDefinitions {
             tools: AnalyzeAgentPrompt.tools
         )
     }
+
+    // MARK: - Art Agent
+
+    public static func artAgent() -> MCAgent {
+        MCAgent(
+            role: .art,
+            systemPrompt: ArtAgentPrompt.systemPrompt,
+            tools: ArtAgentPrompt.tools
+        )
+    }
+
+    // MARK: - Audio Agent
+
+    public static func audioAgent() -> MCAgent {
+        MCAgent(
+            role: .audio,
+            systemPrompt: AudioAgentPrompt.systemPrompt,
+            tools: AudioAgentPrompt.tools
+        )
+    }
 }

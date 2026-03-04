@@ -150,7 +150,7 @@ public final class BuildSystem {
             log("Build succeeded")
         } catch {
             status = .failed(error: error.localizedDescription)
-            log("Build failed: \(error.localizedDescription)")
+            log("Build failed: \(error.localizedDescription)", level: .error)
         }
     }
 
@@ -194,7 +194,7 @@ public final class BuildSystem {
         enginePackagePath: URL
     ) async {
         guard !isPlaying else {
-            log("Already playing — stop before starting again")
+            log("Already playing — stop before starting again", level: .warning)
             return
         }
 
@@ -326,7 +326,7 @@ public final class BuildSystem {
 
         } catch {
             status = .failed(error: error.localizedDescription)
-            log("Play mode failed: \(error.localizedDescription)")
+            log("Play mode failed: \(error.localizedDescription)", level: .error)
         }
     }
 
@@ -812,9 +812,15 @@ public final class BuildSystem {
         """
     }
 
-    private func log(_ message: String) {
+    private func log(_ message: String, level: MCLogLevel = .info) {
         let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)"
         buildLog.append(line)
+
+        switch level {
+        case .warning:         MCLog.warning(.editor, message)
+        case .error, .fatal:   MCLog.error(.editor, message)
+        default:               MCLog.info(.editor, message)
+        }
     }
 }
 

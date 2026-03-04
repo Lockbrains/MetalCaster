@@ -45,7 +45,7 @@ let package = Package(
         ),
         .target(
             name: "MetalCasterScene",
-            dependencies: ["MetalCasterCore", "MetalCasterRenderer"],
+            dependencies: ["MetalCasterCore", "MetalCasterRenderer", "MetalCasterAudio"],
             path: "Sources/MetalCasterScene",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -62,7 +62,7 @@ let package = Package(
         ),
         .target(
             name: "MetalCasterPhysics",
-            dependencies: ["MetalCasterCore", "MetalCasterScene"],
+            dependencies: ["MetalCasterCore", "MetalCasterScene", "MetalCasterMath"],
             path: "Sources/MetalCasterPhysics",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -88,6 +88,8 @@ let package = Package(
                 "MetalCasterScene",
                 "MetalCasterAsset",
                 "MetalCasterAI",
+                "MetalCasterAudio",
+                "MetalCasterPhysics",
             ],
             path: "Apps/MetalCasterEditor/Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
