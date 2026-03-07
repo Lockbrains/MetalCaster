@@ -178,6 +178,22 @@ struct MetalCasterEditorApp: App {
                     editorState?.showSDFCanvas = true
                 }
                 .disabled(editorState == nil)
+
+                Divider()
+
+                Section("Analyze") {
+                    Button("Frame Debugger") {
+                        editorState?.showFrameDebugger = true
+                    }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                    .disabled(editorState == nil)
+
+                    Button("Profiler") {
+                        editorState?.showProfiler = true
+                    }
+                    .keyboardShortcut("p", modifiers: [.command, .option])
+                    .disabled(editorState == nil)
+                }
             }
 
             CommandMenu("AI") {

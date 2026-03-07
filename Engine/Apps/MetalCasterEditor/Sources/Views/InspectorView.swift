@@ -47,6 +47,10 @@ struct InspectorView: View {
                     nameSection(entity)
                     sectionDivider()
                 }
+                if state.engine.world.hasComponent(ParentComponent.self, on: entity) {
+                    hierarchySection(entity)
+                    sectionDivider()
+                }
                 if state.engine.world.hasComponent(TransformComponent.self, on: entity) {
                     transformSection(entity)
                     sectionDivider()
@@ -420,6 +424,51 @@ struct InspectorView: View {
             ))
             .textFieldStyle(.plain)
             .mcInputStyle()
+        }
+    }
+
+    @ViewBuilder
+    private func hierarchySection(_ entity: Entity) -> some View {
+        let parentEntity = state.sceneGraph.parent(of: entity)
+        let parentName = parentEntity.map { state.sceneGraph.name(of: $0) } ?? "None"
+
+        MCSection(title: "Hierarchy") {
+            HStack {
+                Text("Parent")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textSecondary)
+                    .frame(width: 70, alignment: .leading)
+                if let parentEntity {
+                    Button {
+                        state.selectedEntity = parentEntity
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.left")
+                                .font(.system(size: 9))
+                            Text(parentName)
+                                .lineLimit(1)
+                        }
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.statusBlue)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Button {
+                        state.reparentEntity(entity, to: nil)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Unparent")
+                } else {
+                    Text(parentName)
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textTertiary)
+                    Spacer()
+                }
+            }
         }
     }
 

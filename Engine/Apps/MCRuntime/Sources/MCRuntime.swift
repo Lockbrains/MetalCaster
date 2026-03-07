@@ -13,6 +13,7 @@ public final class MCRuntime {
     public let sceneGraph: SceneGraph
     public let sceneSerializer = SceneSerializer()
     
+    public let hierarchySystem = HierarchySystem()
     public let transformSystem = TransformSystem()
     public let cameraSystem = CameraSystem()
     public let lightingSystem = LightingSystem()
@@ -24,6 +25,7 @@ public final class MCRuntime {
     public init() {
         self.sceneGraph = SceneGraph(world: engine.world)
         
+        engine.addSystem(hierarchySystem)
         engine.addSystem(transformSystem)
         engine.addSystem(cameraSystem)
         engine.addSystem(lightingSystem)

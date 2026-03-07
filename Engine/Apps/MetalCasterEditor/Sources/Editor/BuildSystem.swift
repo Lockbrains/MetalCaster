@@ -421,6 +421,7 @@ public final class BuildSystem {
             let engine = Engine()
             let sceneGraph: SceneGraph
             let usdImporter = USDImporter()
+            let hierarchySystem = HierarchySystem()
             let transformSystem = TransformSystem()
             let cameraSystem = CameraSystem()
             let lightingSystem = LightingSystem()
@@ -430,6 +431,7 @@ public final class BuildSystem {
 
             init() {
                 sceneGraph = SceneGraph(world: engine.world)
+                engine.addSystem(hierarchySystem)
                 engine.addSystem(transformSystem)
                 engine.addSystem(cameraSystem)
                 engine.addSystem(lightingSystem)
@@ -642,6 +644,7 @@ public final class BuildSystem {
             let engine = Engine()
             let sceneGraph: SceneGraph
             let sceneSerializer = SceneSerializer()
+            let hierarchySystem = HierarchySystem()
             let transformSystem = TransformSystem()
             let cameraSystem = CameraSystem()
             let lightingSystem = LightingSystem()
@@ -650,6 +653,7 @@ public final class BuildSystem {
 
             init() {
                 sceneGraph = SceneGraph(world: engine.world)
+                engine.addSystem(hierarchySystem)
                 engine.addSystem(transformSystem)
                 engine.addSystem(cameraSystem)
                 engine.addSystem(lightingSystem)

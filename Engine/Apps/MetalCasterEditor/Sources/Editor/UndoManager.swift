@@ -3,6 +3,7 @@ import simd
 import MetalCasterCore
 import MetalCasterScene
 import MetalCasterRenderer
+import MetalCasterAudio
 
 // MARK: - Entity Snapshot
 
@@ -19,6 +20,16 @@ public struct EntitySnapshot {
     public var skybox: SkyboxComponent?
     public var postProcessVolume: PostProcessVolumeComponent?
     public var gameplayScriptRef: GameplayScriptRef?
+    public var audioSource: AudioSourceComponent?
+    public var audioListener: AudioListenerComponent?
+    public var lod: LODComponent?
+    public var physicsBody: PhysicsBodyComponent?
+    public var collider: ColliderComponent?
+    public var uiCanvas: UICanvasComponent?
+    public var uiElement: UIElementComponent?
+    public var uiLabel: UILabelComponent?
+    public var uiImage: UIImageComponent?
+    public var uiPanel: UIPanelComponent?
 
     public static func capture(entity: Entity, world: World) -> EntitySnapshot {
         EntitySnapshot(
@@ -31,7 +42,17 @@ public struct EntitySnapshot {
             manager: world.getComponent(ManagerComponent.self, from: entity),
             skybox: world.getComponent(SkyboxComponent.self, from: entity),
             postProcessVolume: world.getComponent(PostProcessVolumeComponent.self, from: entity),
-            gameplayScriptRef: world.getComponent(GameplayScriptRef.self, from: entity)
+            gameplayScriptRef: world.getComponent(GameplayScriptRef.self, from: entity),
+            audioSource: world.getComponent(AudioSourceComponent.self, from: entity),
+            audioListener: world.getComponent(AudioListenerComponent.self, from: entity),
+            lod: world.getComponent(LODComponent.self, from: entity),
+            physicsBody: world.getComponent(PhysicsBodyComponent.self, from: entity),
+            collider: world.getComponent(ColliderComponent.self, from: entity),
+            uiCanvas: world.getComponent(UICanvasComponent.self, from: entity),
+            uiElement: world.getComponent(UIElementComponent.self, from: entity),
+            uiLabel: world.getComponent(UILabelComponent.self, from: entity),
+            uiImage: world.getComponent(UIImageComponent.self, from: entity),
+            uiPanel: world.getComponent(UIPanelComponent.self, from: entity)
         )
     }
 
@@ -46,6 +67,16 @@ public struct EntitySnapshot {
         if let skybox { world.addComponent(skybox, to: entity) }
         if let postProcessVolume { world.addComponent(postProcessVolume, to: entity) }
         if let gameplayScriptRef { world.addComponent(gameplayScriptRef, to: entity) }
+        if let audioSource { world.addComponent(audioSource, to: entity) }
+        if let audioListener { world.addComponent(audioListener, to: entity) }
+        if let lod { world.addComponent(lod, to: entity) }
+        if let physicsBody { world.addComponent(physicsBody, to: entity) }
+        if let collider { world.addComponent(collider, to: entity) }
+        if let uiCanvas { world.addComponent(uiCanvas, to: entity) }
+        if let uiElement { world.addComponent(uiElement, to: entity) }
+        if let uiLabel { world.addComponent(uiLabel, to: entity) }
+        if let uiImage { world.addComponent(uiImage, to: entity) }
+        if let uiPanel { world.addComponent(uiPanel, to: entity) }
     }
 
     public var displayName: String {

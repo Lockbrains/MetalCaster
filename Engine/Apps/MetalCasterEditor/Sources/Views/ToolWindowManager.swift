@@ -5,11 +5,15 @@ import AppKit
 enum ToolWindowKind: String {
     case shaderCanvas = "Shader Canvas"
     case sdfCanvas = "SDF Canvas"
+    case profiler = "Profiler"
+    case frameDebugger = "Frame Debugger"
 
     var defaultSize: NSSize {
         switch self {
-        case .shaderCanvas: NSSize(width: 1100, height: 720)
-        case .sdfCanvas:    NSSize(width: 1100, height: 720)
+        case .shaderCanvas:  NSSize(width: 1100, height: 720)
+        case .sdfCanvas:     NSSize(width: 1100, height: 720)
+        case .profiler:      NSSize(width: 680, height: 520)
+        case .frameDebugger: NSSize(width: 780, height: 560)
         }
     }
 }
@@ -27,8 +31,10 @@ enum ToolWindowManager {
 
         let content: AnyView
         switch kind {
-        case .shaderCanvas: content = AnyView(ShaderCanvasToolView().environment(state))
-        case .sdfCanvas:    content = AnyView(SDFCanvasToolView().environment(state))
+        case .shaderCanvas:  content = AnyView(ShaderCanvasToolView().environment(state))
+        case .sdfCanvas:     content = AnyView(SDFCanvasToolView().environment(state))
+        case .profiler:      content = AnyView(ProfilerView().environment(state))
+        case .frameDebugger: content = AnyView(FrameDebuggerView().environment(state))
         }
 
         let hosting = NSHostingView(rootView: content)
@@ -55,8 +61,10 @@ enum ToolWindowManager {
     private static func resetFlag(_ kind: ToolWindowKind, state: EditorState) {
         DispatchQueue.main.async {
             switch kind {
-            case .shaderCanvas: state.showShaderCanvas = false
-            case .sdfCanvas:    state.showSDFCanvas = false
+            case .shaderCanvas:  state.showShaderCanvas = false
+            case .sdfCanvas:     state.showSDFCanvas = false
+            case .profiler:      state.showProfiler = false
+            case .frameDebugger: state.showFrameDebugger = false
             }
         }
     }

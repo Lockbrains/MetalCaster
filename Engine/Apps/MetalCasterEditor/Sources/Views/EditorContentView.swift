@@ -120,6 +120,12 @@ struct EditorContentView: View {
         .onChange(of: state.showSDFCanvas) { _, show in
             if show { ToolWindowManager.open(.sdfCanvas, state: state) }
         }
+        .onChange(of: state.showProfiler) { _, show in
+            if show { ToolWindowManager.open(.profiler, state: state) }
+        }
+        .onChange(of: state.showFrameDebugger) { _, show in
+            if show { ToolWindowManager.open(.frameDebugger, state: state) }
+        }
         .alert(
             "Unsaved Changes",
             isPresented: Binding(

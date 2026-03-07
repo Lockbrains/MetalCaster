@@ -387,8 +387,8 @@ final class EditorEngineAPI: EngineAPIProvider {
             let p = tc.transform.position
             let s = tc.transform.scale
             lines.append("  Transform: pos(\(p.x), \(p.y), \(p.z)) scale(\(s.x), \(s.y), \(s.z))")
-            if let parent = tc.parent {
-                lines.append("  Parent: \(state.sceneGraph.name(of: parent))")
+            if let pc = world.getComponent(ParentComponent.self, from: entity) {
+                lines.append("  Parent: \(state.sceneGraph.name(of: pc.entity))")
             }
         }
         if let cam = world.getComponent(CameraComponent.self, from: entity) {
@@ -650,9 +650,9 @@ final class EditorEngineAPI: EngineAPIProvider {
                !world.hasComponent(MaterialComponent.self, on: entity) {
                 issues.append("[WARNING] '\(name)' has Mesh but no Material — will not render")
             }
-            if let tc = world.getComponent(TransformComponent.self, from: entity),
-               let parent = tc.parent, !world.isAlive(parent) {
-                issues.append("[ERROR] '\(name)' references dead parent entity \(parent.id)")
+            if let pc = world.getComponent(ParentComponent.self, from: entity),
+               !world.isAlive(pc.entity) {
+                issues.append("[ERROR] '\(name)' references dead parent entity \(pc.entity.id)")
             }
         }
 

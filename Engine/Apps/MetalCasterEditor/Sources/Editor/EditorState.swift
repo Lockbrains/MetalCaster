@@ -28,6 +28,7 @@ public final class EditorState {
 
     // MARK: - Systems
 
+    public let hierarchySystem = HierarchySystem()
     public let transformSystem = TransformSystem()
     public let cameraSystem = CameraSystem()
     public let lightingSystem = LightingSystem()
@@ -46,15 +47,48 @@ public final class EditorState {
 
     // MARK: - Inline Rename
 
-    /// Set to a non-nil GUID to trigger rename mode on that asset row.
-    public var renamingAssetGUID: UUID? = nil
+    public let renameManager = RenameManager()
 
-    /// Set to a non-nil entity to trigger rename mode on that entity row.
-    public var renamingEntityID: Entity? = nil
+    public var renamingAssetGUID: UUID? {
+        get {
+            if case .asset(let guid) = renameManager.target { return guid }
+            return nil
+        }
+        set {
+            if let guid = newValue { renameManager.beginRename(.asset(guid)) }
+            else if case .asset = renameManager.target { renameManager.endRename() }
+        }
+    }
+
+    public var renamingEntityID: Entity? {
+        get {
+            if case .entity(let e) = renameManager.target { return e }
+            return nil
+        }
+        set {
+            if let e = newValue { renameManager.beginRename(.entity(e)) }
+            else if case .entity = renameManager.target { renameManager.endRename() }
+        }
+    }
+
+    public var renamingCollectionID: UUID? {
+        get {
+            if case .collection(let id) = renameManager.target { return id }
+            return nil
+        }
+        set {
+            if let id = newValue { renameManager.beginRename(.collection(id)) }
+            else if case .collection = renameManager.target { renameManager.endRename() }
+        }
+    }
 
     /// Incremented whenever the ECS World is mutated.
     /// Inspector and other views read this to force SwiftUI re-evaluation.
     public var worldRevision: Int = 0
+
+    // MARK: - Collections
+
+    public var collections: [SceneCollection] = []
 
     /// Mutate the world and bump the revision counter so SwiftUI re-renders.
     /// Edits are coalesced: rapid successive changes to the same entity become a single undo entry.
@@ -150,6 +184,8 @@ public final class EditorState {
     public var showAISettings = false
     public var showShaderCanvas = false
     public var showSDFCanvas = false
+    public var showProfiler = false
+    public var showFrameDebugger = false
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
@@ -354,6 +390,7 @@ public final class EditorState {
         self.assetDatabase = AssetDatabase(projectManager: projectManager)
         self.audioSystem = AudioSystem(audioEngine: audioEngine)
 
+        engine.addSystem(hierarchySystem)
         engine.addSystem(transformSystem)
         engine.addSystem(cameraSystem)
         engine.addSystem(lightingSystem)
@@ -640,6 +677,135 @@ public final class EditorState {
         executeCommand(CreateEntityCommand(snapshot: snapshot))
     }
 
+    // MARK: - Hierarchy Operations
+
+    @discardableResult
+    public func addChildEntity(parent: Entity) -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Empty Entity", parent: parent)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    public func reparentEntity(_ entity: Entity, to newParent: Entity?) {
+        commitPendingEdit()
+        sceneGraph.setParent(entity, to: newParent)
+        worldRevision += 1
+        markDirty()
+    }
+
+    // MARK: - Collection Operations
+
+    @discardableResult
+    public func createCollection(name: String = "New Collection") -> SceneCollection {
+        let collection = SceneCollection(name: name)
+        collections.append(collection)
+        worldRevision += 1
+        markDirty()
+        return collection
+    }
+
+    public func deleteCollection(id: UUID) {
+        collections.removeAll { $0.id == id }
+        worldRevision += 1
+        markDirty()
+    }
+
+    public func renameCollection(id: UUID, to name: String) {
+        guard let idx = collections.firstIndex(where: { $0.id == id }) else { return }
+        collections[idx].name = name
+        worldRevision += 1
+        markDirty()
+    }
+
+    public func addEntityToCollection(_ entity: Entity, collectionID: UUID) {
+        removeEntityFromAllCollections(entity)
+        guard let idx = collections.firstIndex(where: { $0.id == collectionID }) else { return }
+        collections[idx].memberEntityIDs.append(entity.id)
+        worldRevision += 1
+        markDirty()
+    }
+
+    public func removeEntityFromCollection(_ entity: Entity, collectionID: UUID) {
+        guard let idx = collections.firstIndex(where: { $0.id == collectionID }) else { return }
+        collections[idx].memberEntityIDs.removeAll { $0 == entity.id }
+        worldRevision += 1
+        markDirty()
+    }
+
+    public func removeEntityFromAllCollections(_ entity: Entity) {
+        for i in collections.indices {
+            collections[i].memberEntityIDs.removeAll { $0 == entity.id }
+        }
+    }
+
+    public func collectionContaining(_ entity: Entity) -> SceneCollection? {
+        collections.first { $0.memberEntityIDs.contains(entity.id) }
+    }
+
+    // MARK: - Collection Persistence
+
+    private func collectionsFileURL(for sceneURL: URL) -> URL {
+        sceneURL.deletingPathExtension().appendingPathExtension("mccoll")
+    }
+
+    private func saveCollections(for sceneURL: URL) {
+        let url = collectionsFileURL(for: sceneURL)
+        var file = SceneCollectionsFile()
+        for c in collections {
+            file.collections.append(SceneCollectionData(
+                id: c.id,
+                name: c.name,
+                memberNames: c.memberNames(sceneGraph: sceneGraph)
+            ))
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(file)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            print("[MetalCaster] Failed to save collections: \(error)")
+        }
+    }
+
+    private func loadCollections(for sceneURL: URL) {
+        let url = collectionsFileURL(for: sceneURL)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            collections = []
+            return
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let file = try JSONDecoder().decode(SceneCollectionsFile.self, from: data)
+
+            let world = engine.world
+            let nameToEntity: [String: Entity] = {
+                var map: [String: Entity] = [:]
+                for entity in world.entities {
+                    map[sceneGraph.name(of: entity)] = entity
+                }
+                return map
+            }()
+
+            collections = file.collections.map { cd in
+                let memberIDs = cd.memberNames.compactMap { name in
+                    nameToEntity[name]?.id
+                }
+                var c = SceneCollection(name: cd.name, memberEntityIDs: memberIDs)
+                c.id = cd.id
+                return c
+            }
+        } catch {
+            print("[MetalCaster] Failed to load collections: \(error)")
+            collections = []
+        }
+    }
+
     // MARK: - Clipboard
 
     public func copySelectedEntity() {
@@ -680,6 +846,7 @@ public final class EditorState {
 
     public func newScene() {
         engine.world.clear()
+        collections = []
         selectedEntity = nil
         sceneName = "Untitled Scene"
         isSceneDirty = false
@@ -727,6 +894,7 @@ public final class EditorState {
                 usdaURL = url.deletingPathExtension().appendingPathExtension("usda")
             }
             try usdExporter.writeScene(sceneGraph: sceneGraph, world: engine.world, to: usdaURL)
+            saveCollections(for: usdaURL)
             currentFileURL = usdaURL
             sceneName = usdaURL.deletingPathExtension().lastPathComponent
             isSceneDirty = false
@@ -764,6 +932,7 @@ public final class EditorState {
             sceneName = url.deletingPathExtension().lastPathComponent
             selectedEntity = nil
             isSceneDirty = false
+            loadCollections(for: url)
             worldRevision += 1
             UserDefaults.standard.set(url.path, forKey: Self.lastOpenedSceneKey)
         } catch {

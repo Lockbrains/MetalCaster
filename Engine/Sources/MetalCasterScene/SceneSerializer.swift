@@ -20,6 +20,10 @@ public final class SceneSerializer {
         for (entity, tc) in world.query(TransformComponent.self) {
             var entityData = EntityData(id: entity.id)
             entityData.transform = tc
+
+            if let pc = world.getComponent(ParentComponent.self, from: entity) {
+                entityData.parentID = pc.entity.id
+            }
             
             if let name = world.getComponent(NameComponent.self, from: entity) {
                 entityData.name = name
@@ -108,14 +112,11 @@ public final class SceneSerializer {
         for ed in sceneData.entities {
             guard let entity = entityMap[ed.id] else { continue }
             
-            if var tc = ed.transform {
-                // Remap parent entity ID
-                if let parentID = tc.parent?.id, let newParent = entityMap[parentID] {
-                    tc.parent = newParent
-                } else {
-                    tc.parent = nil
-                }
+            if let tc = ed.transform {
                 world.addComponent(tc, to: entity)
+            }
+            if let parentID = ed.parentID, let newParent = entityMap[parentID] {
+                world.addComponent(ParentComponent(newParent), to: entity)
             }
             if let name = ed.name {
                 world.addComponent(name, to: entity)
@@ -187,6 +188,7 @@ struct SceneData: Codable {
 
 struct EntityData: Codable {
     var id: UInt64
+    var parentID: UInt64?
     var transform: TransformComponent?
     var name: NameComponent?
     var mesh: MeshComponent?

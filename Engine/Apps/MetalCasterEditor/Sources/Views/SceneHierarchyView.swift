@@ -75,6 +75,8 @@ struct SceneHierarchyView: View {
                 Button("Post Process Volume") { state.addPostProcessVolume() }
             }
             Divider()
+            Button("New Collection") { state.createCollection() }
+            Divider()
             managersSubmenu
         } label: {
             Image(systemName: "plus")

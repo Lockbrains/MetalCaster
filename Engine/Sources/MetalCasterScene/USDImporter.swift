@@ -2,6 +2,7 @@ import Foundation
 import simd
 import MetalCasterCore
 import MetalCasterRenderer
+import MetalCasterAudio
 import ModelIO
 
 /// Imports USD/USDZ/OBJ files into the ECS world as entities with components.
@@ -254,7 +255,10 @@ public final class USDImporter {
             
         case "Mesh":
             let meshType = parseMeshType(from: propertyLines)
-            world.addComponent(MeshComponent(meshType: meshType), to: entity)
+            var meshComp = MeshComponent(meshType: meshType)
+            meshComp.castsShadows = parseBoolValue(from: propertyLines, key: "mc:castsShadows") ?? true
+            meshComp.receivesShadows = parseBoolValue(from: propertyLines, key: "mc:receivesShadows") ?? true
+            world.addComponent(meshComp, to: entity)
             
             let material: MCMaterial
             if let mat = meta?.material {
@@ -284,6 +288,36 @@ public final class USDImporter {
 
         if let scriptRef = meta?.gameplayScriptRef {
             world.addComponent(scriptRef, to: entity)
+        }
+        if let audioSource = meta?.audioSource {
+            world.addComponent(audioSource, to: entity)
+        }
+        if let audioListener = meta?.audioListener {
+            world.addComponent(audioListener, to: entity)
+        }
+        if let lod = meta?.lod {
+            world.addComponent(lod, to: entity)
+        }
+        if let physicsBody = meta?.physicsBody {
+            world.addComponent(physicsBody, to: entity)
+        }
+        if let collider = meta?.collider {
+            world.addComponent(collider, to: entity)
+        }
+        if let uiCanvas = meta?.uiCanvas {
+            world.addComponent(uiCanvas, to: entity)
+        }
+        if let uiElement = meta?.uiElement {
+            world.addComponent(uiElement, to: entity)
+        }
+        if let uiLabel = meta?.uiLabel {
+            world.addComponent(uiLabel, to: entity)
+        }
+        if let uiImage = meta?.uiImage {
+            world.addComponent(uiImage, to: entity)
+        }
+        if let uiPanel = meta?.uiPanel {
+            world.addComponent(uiPanel, to: entity)
         }
         
         return entity
@@ -476,6 +510,17 @@ public final class USDImporter {
         let parts = line.split(separator: "=")
         guard parts.count >= 2 else { return nil }
         return Float(parts.last!.trimmingCharacters(in: .whitespaces))
+    }
+    
+    private func parseBoolValue(from lines: [String], key: String) -> Bool? {
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains(key) {
+                if trimmed.hasSuffix("true") { return true }
+                if trimmed.hasSuffix("false") { return false }
+            }
+        }
+        return nil
     }
     
     private func parseStringValue(from line: String) -> String? {

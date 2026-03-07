@@ -2,6 +2,7 @@ import Foundation
 import simd
 import MetalCasterCore
 import MetalCasterRenderer
+import MetalCasterAudio
 
 /// Exports an ECS world to USD format.
 ///
@@ -75,6 +76,39 @@ public final class USDExporter {
             }
             if let scriptRef = world.getComponent(GameplayScriptRef.self, from: entity) {
                 entry.gameplayScriptRef = scriptRef
+            }
+            if let audioSource = world.getComponent(AudioSourceComponent.self, from: entity) {
+                var saved = audioSource
+                saved.isPlaying = false
+                saved._playerID = nil
+                entry.audioSource = saved
+            }
+            if let audioListener = world.getComponent(AudioListenerComponent.self, from: entity) {
+                entry.audioListener = audioListener
+            }
+            if let lod = world.getComponent(LODComponent.self, from: entity) {
+                entry.lod = lod
+            }
+            if let physicsBody = world.getComponent(PhysicsBodyComponent.self, from: entity) {
+                entry.physicsBody = physicsBody
+            }
+            if let collider = world.getComponent(ColliderComponent.self, from: entity) {
+                entry.collider = collider
+            }
+            if let uiCanvas = world.getComponent(UICanvasComponent.self, from: entity) {
+                entry.uiCanvas = uiCanvas
+            }
+            if let uiElement = world.getComponent(UIElementComponent.self, from: entity) {
+                entry.uiElement = uiElement
+            }
+            if let uiLabel = world.getComponent(UILabelComponent.self, from: entity) {
+                entry.uiLabel = uiLabel
+            }
+            if let uiImage = world.getComponent(UIImageComponent.self, from: entity) {
+                entry.uiImage = uiImage
+            }
+            if let uiPanel = world.getComponent(UIPanelComponent.self, from: entity) {
+                entry.uiPanel = uiPanel
             }
             
             sidecar.entities.append(entry)
@@ -304,5 +338,15 @@ public struct SceneSidecar: Codable {
         public var skybox: SkyboxComponent?
         public var postProcessVolume: PostProcessVolumeComponent?
         public var gameplayScriptRef: GameplayScriptRef?
+        public var audioSource: AudioSourceComponent?
+        public var audioListener: AudioListenerComponent?
+        public var lod: LODComponent?
+        public var physicsBody: PhysicsBodyComponent?
+        public var collider: ColliderComponent?
+        public var uiCanvas: UICanvasComponent?
+        public var uiElement: UIElementComponent?
+        public var uiLabel: UILabelComponent?
+        public var uiImage: UIImageComponent?
+        public var uiPanel: UIPanelComponent?
     }
 }

@@ -530,7 +530,6 @@ struct AssetListRow: View {
     @Environment(EditorState.self) private var state
     @State private var renameText = ""
     @State private var lastClickTime: Date = .distantPast
-    @FocusState private var renameFieldFocused: Bool
     @State private var isDropTarget = false
 
     private static let doubleClickInterval: TimeInterval = 0.3
@@ -565,9 +564,6 @@ struct AssetListRow: View {
             .onChange(of: state.renamingAssetGUID) { _, newVal in
                 if newVal == entry.guid {
                     renameText = entry.name
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        renameFieldFocused = true
-                    }
                 }
             }
     }
@@ -585,11 +581,8 @@ struct AssetListRow: View {
                     .frame(width: 16)
 
                 if isRenaming {
-                    RenameField(text: $renameText, isFocused: $renameFieldFocused) {
+                    RenameField(text: $renameText) {
                         commitRename()
-                    }
-                    .onChange(of: renameFieldFocused) { _, focused in
-                        if !focused { commitRename() }
                     }
                 } else {
                     Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
@@ -831,7 +824,6 @@ struct AssetListRow: View {
     private func commitRename() {
         guard isRenaming else { return }
         state.renamingAssetGUID = nil
-        renameFieldFocused = false
         guard !renameText.isEmpty, renameText != entry.name else { return }
         _ = try? state.assetDatabase.renameAsset(entry: entry, newName: renameText)
         state.refreshAssetBrowser()
@@ -916,7 +908,6 @@ struct AssetGridCell: View {
     @State private var thumbnail: NSImage?
     @State private var lastClickTime: Date = .distantPast
     @State private var renameText = ""
-    @FocusState private var renameFieldFocused: Bool
     @State private var isDropTarget = false
 
     private static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
@@ -938,13 +929,10 @@ struct AssetGridCell: View {
                 )
 
             if isRenaming {
-                RenameField(text: $renameText, isFocused: $renameFieldFocused) {
+                RenameField(text: $renameText) {
                     commitRename()
                 }
                 .frame(width: 80, height: 14)
-                .onChange(of: renameFieldFocused) { _, focused in
-                    if !focused { commitRename() }
-                }
             } else {
                 Text(entry.isDirectory ? entry.name : "\(entry.name).\(entry.fileExtension)")
                     .font(.system(size: 9))
@@ -992,9 +980,6 @@ struct AssetGridCell: View {
         .onChange(of: state.renamingAssetGUID) { _, newVal in
             if newVal == entry.guid {
                 renameText = entry.name
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    renameFieldFocused = true
-                }
             }
         }
         .onAppear { loadThumbnail() }
@@ -1049,7 +1034,6 @@ struct AssetGridCell: View {
     private func commitRename() {
         guard isRenaming else { return }
         state.renamingAssetGUID = nil
-        renameFieldFocused = false
         guard !renameText.isEmpty, renameText != entry.name else { return }
         _ = try? state.assetDatabase.renameAsset(entry: entry, newName: renameText)
         state.refreshAssetBrowser()
@@ -1134,81 +1118,7 @@ struct AssetGridCell: View {
     }
 }
 
-// MARK: - RenameField
-
-/// NSTextField wrapper that auto-selects all text on focus and commits on Return/blur.
-#if canImport(AppKit)
-struct RenameField: NSViewRepresentable {
-    @Binding var text: String
-    var isFocused: FocusState<Bool>.Binding
-    var onCommit: () -> Void
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
-        field.isBordered = false
-        field.drawsBackground = false
-        field.font = .systemFont(ofSize: 11)
-        field.textColor = .white
-        field.focusRingType = .none
-        field.cell?.isScrollable = true
-        field.cell?.wraps = false
-        field.cell?.lineBreakMode = .byClipping
-        field.delegate = context.coordinator
-        return field
-    }
-
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        context.coordinator.onTextChange = { self.text = $0 }
-        context.coordinator.onCommit = self.onCommit
-        context.coordinator.setFocused = { self.isFocused.wrappedValue = $0 }
-
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-        if isFocused.wrappedValue && nsView.window?.firstResponder != nsView.currentEditor() {
-            nsView.becomeFirstResponder()
-            nsView.selectText(nil)
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    class Coordinator: NSObject, NSTextFieldDelegate {
-        var onTextChange: ((String) -> Void)?
-        var onCommit: (() -> Void)?
-        var setFocused: ((Bool) -> Void)?
-        private var didCommit = false
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            onTextChange?(field.stringValue)
-        }
-
-        func controlTextDidEndEditing(_ obj: Notification) {
-            guard !didCommit else { return }
-            didCommit = true
-            onCommit?()
-        }
-
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                didCommit = true
-                onCommit?()
-                DispatchQueue.main.async { [weak self] in self?.didCommit = false }
-                return true
-            }
-            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-                didCommit = true
-                setFocused?(false)
-                onCommit?()
-                DispatchQueue.main.async { [weak self] in self?.didCommit = false }
-                return true
-            }
-            return false
-        }
-    }
-}
-#endif
+// RenameField is defined in RenameManager.swift
 
 // MARK: - Conditional Drop Target
 
