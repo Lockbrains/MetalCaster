@@ -657,6 +657,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
     func handleKeyDown(event: NSEvent) {
         let hasCmd = event.modifierFlags.contains(.command)
+        let hasShift = event.modifierFlags.contains(.shift)
 
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "q":
@@ -667,6 +668,12 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             state.sceneToolMode = .scale
         case "r":
             if !hasCmd { state.sceneToolMode = .rotate }
+        case "f":
+            if hasCmd && hasShift {
+                state.alignSelectedEntityToView()
+            } else if !hasCmd {
+                state.focusOnSelectedEntity()
+            }
         case "1":
             state.applyOrthoPreset(hasCmd ? .back : .front)
         case "3":

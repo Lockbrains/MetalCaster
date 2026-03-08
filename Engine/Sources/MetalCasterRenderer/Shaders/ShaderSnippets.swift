@@ -156,6 +156,47 @@ public struct ShaderSnippets {
         return preview
     }
 
+    // MARK: - Texture Declarations
+
+    /// Generates MSL fragment function parameter declarations for bound texture slots.
+    /// These are injected into the fragment_main signature when texture slots are active.
+    public static func textureDeclarations(for slots: [TextureSlot]) -> String {
+        guard !slots.isEmpty else { return "" }
+        return slots.map { slot in
+            "texture2d<float> \(slot.name) [[texture(\(slot.bindingIndex))]]"
+        }.joined(separator: ",\n                             ")
+    }
+
+    /// Injects texture parameters into fragment_main signatures.
+    public static func injectTextureParams(into code: String, slots: [TextureSlot]) -> String {
+        guard !slots.isEmpty else { return code }
+        var result = code
+        let injection = slots.map { slot in
+            ",\n                             texture2d<float> \(slot.name) [[texture(\(slot.bindingIndex))]]"
+        }.joined()
+        let pattern = #"(fragment_main\s*\([\s\S]*?)\)\s*\{"#
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let nsResult = result as NSString
+            let matches = regex.matches(in: result, range: NSRange(location: 0, length: nsResult.length))
+            for match in matches.reversed() {
+                let innerRange = match.range(at: 1)
+                let inner = nsResult.substring(with: innerRange)
+                if slots.allSatisfy({ inner.contains($0.name) }) { continue }
+                let replacement = inner + injection + ") {"
+                result = (result as NSString).replacingCharacters(in: match.range, with: replacement)
+            }
+        }
+        return result
+    }
+
+    // MARK: - Helper Function Injection
+
+    /// Injects user-defined helper functions between the header and main shader code.
+    public static func injectHelperFunctions(_ helpers: String, into code: String) -> String {
+        guard !helpers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return code }
+        return "\n// === Helper Functions ===\n" + helpers + "\n// === End Helpers ===\n\n" + code
+    }
+
     // MARK: - Parameter System
 
     public static func parseParams(from code: String) -> [ShaderParam] {
@@ -679,6 +720,50 @@ public struct ShaderSnippets {
 
     fragment float4 grid_fragment(GridVertexOut in [[stage_in]]) {
         return in.color;
+    }
+    """
+
+    // MARK: - Lit Material Template (PBR-friendly)
+
+    /// A PBR-inspired fragment shader for the Lit Material template.
+    /// Uses world-space normals, view direction, and a simplified Cook-Torrance BRDF.
+    public static let litMaterialFragment = """
+    // @param _baseColor color 0.8 0.3 0.2
+    // @param _metallic float 0.0 0.0 1.0
+    // @param _roughness float 0.5 0.04 1.0
+    // @param _ambientIntensity float 0.08 0.0 0.5
+    fragment float4 fragment_main(VertexOut in [[stage_in]],
+                                   constant float *params [[buffer(2)]]) {
+        float3 N = normalize(in.normalWS);
+        float3 V = normalize(in.viewDirWS);
+        float3 L = normalize(float3(0.5, 1.0, 0.8));
+        float3 H = normalize(L + V);
+
+        float NdotL = max(0.0, dot(N, L));
+        float NdotH = max(0.0, dot(N, H));
+        float NdotV = max(0.0, dot(N, V));
+
+        float3 baseColor = _baseColor;
+        float metallic = _metallic;
+        float roughness = max(0.04, _roughness);
+        float alpha = roughness * roughness;
+
+        float3 F0 = mix(float3(0.04), baseColor, metallic);
+        float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - max(0.0, dot(H, V)), 5.0);
+
+        float a2 = alpha * alpha;
+        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+        float D = a2 / (3.14159265 * denom * denom);
+
+        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
+
+        float3 specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, 0.001);
+        float3 kD = (1.0 - fresnel) * (1.0 - metallic);
+        float3 diffuse = kD * baseColor / 3.14159265;
+
+        float3 color = (diffuse + specular) * NdotL + baseColor * _ambientIntensity;
+        return float4(color, 1.0);
     }
     """
 

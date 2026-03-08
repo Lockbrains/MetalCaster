@@ -44,6 +44,7 @@ public final class EditorState {
     // MARK: - Selection
 
     public var selectedEntity: Entity? = nil
+    public var selectedCollectionID: UUID? = nil
 
     // MARK: - Inline Rename
 
@@ -381,6 +382,48 @@ public final class EditorState {
         return cameras.first(where: { $0.2.isActive })?.0 ?? cameras.first?.0
     }
 
+    // MARK: - Viewport Camera Actions
+
+    /// Moves the orbit camera to frame the selected entity.
+    /// Keeps current yaw/pitch and adjusts target + distance based on entity bounds.
+    public func focusOnSelectedEntity() {
+        guard let entity = selectedEntity,
+              let tc = engine.world.getComponent(TransformComponent.self, from: entity) else { return }
+
+        let worldPosition = SIMD3<Float>(
+            tc.worldMatrix.columns.3.x,
+            tc.worldMatrix.columns.3.y,
+            tc.worldMatrix.columns.3.z
+        )
+
+        let scale = tc.transform.scale
+        let maxExtent = max(scale.x, max(scale.y, scale.z))
+        let framingDistance = max(maxExtent * 3.0, 2.0)
+
+        cameraOrbitTarget = worldPosition
+        cameraOrbitDistance = framingDistance
+    }
+
+    /// Aligns the selected entity's transform to the current editor camera pose.
+    /// Sets position to the camera eye and rotation to look toward the orbit target.
+    public func alignSelectedEntityToView() {
+        guard let entity = selectedEntity,
+              engine.world.hasComponent(TransformComponent.self, on: entity) else { return }
+
+        let eye = cameraOrbitTarget + SIMD3<Float>(
+            cameraOrbitDistance * cos(cameraOrbitPitch) * sin(cameraOrbitYaw),
+            cameraOrbitDistance * sin(cameraOrbitPitch),
+            cameraOrbitDistance * cos(cameraOrbitPitch) * cos(cameraOrbitYaw)
+        )
+        let forward = simd_normalize(cameraOrbitTarget - eye)
+        let rotation = simd_quatf.lookRotation(forward: forward)
+
+        updateComponent(TransformComponent.self, on: entity) { tc in
+            tc.transform.position = eye
+            tc.transform.rotation = rotation
+        }
+    }
+
     // MARK: - Init
 
     /// Opens an existing project or initializes at the given URL.
@@ -711,6 +754,7 @@ public final class EditorState {
 
     public func deleteCollection(id: UUID) {
         collections.removeAll { $0.id == id }
+        if selectedCollectionID == id { selectedCollectionID = nil }
         worldRevision += 1
         markDirty()
     }
@@ -745,6 +789,22 @@ public final class EditorState {
 
     public func collectionContaining(_ entity: Entity) -> SceneCollection? {
         collections.first { $0.memberEntityIDs.contains(entity.id) }
+    }
+
+    /// Cmd+Shift+N context-aware creation:
+    /// - If an entity inside a collection is selected, creates a new empty entity in that collection.
+    /// - Otherwise, creates a new collection and selects it.
+    public func createCollectionOrEntityInCollection() {
+        if let entity = selectedEntity,
+           let collection = collectionContaining(entity) {
+            let newEntity = addEmptyEntity()
+            addEntityToCollection(newEntity, collectionID: collection.id)
+        } else {
+            let collection = createCollection()
+            selectedCollectionID = collection.id
+            selectedEntity = nil
+            selectedAssetEntry = nil
+        }
     }
 
     // MARK: - Collection Persistence
@@ -848,6 +908,7 @@ public final class EditorState {
         engine.world.clear()
         collections = []
         selectedEntity = nil
+        selectedCollectionID = nil
         sceneName = "Untitled Scene"
         isSceneDirty = false
         setupDefaultScene()
@@ -931,6 +992,7 @@ public final class EditorState {
             currentFileURL = url
             sceneName = url.deletingPathExtension().lastPathComponent
             selectedEntity = nil
+            selectedCollectionID = nil
             isSceneDirty = false
             loadCollections(for: url)
             worldRevision += 1

@@ -27,6 +27,10 @@ public final class ShaderCanvasRenderer {
     private var offscreenB: MTLTexture?
     private var depthTexture: MTLTexture?
 
+    /// User-bound textures for the mesh fragment shader, keyed by binding index.
+    private var userTextures: [Int: MTLTexture] = [:]
+    private var loadedTexturePaths: [Int: String] = [:]
+
     // MARK: - Tracking
 
     private static let meshPipelineKey = UUID()
@@ -63,10 +67,14 @@ public final class ShaderCanvasRenderer {
         let h = Int(view.drawableSize.height)
         ensureTextures(width: w, height: h)
 
+        updateUserTextures(state: state)
         updateShaders(state: state)
 
         let time = Float(CFAbsoluteTimeGetCurrent() - startTime)
         let aspect = Float(w) / Float(max(h, 1))
+
+        // Always clear offscreenA so the blit never reads uninitialized content
+        clearOffscreen(commandBuffer: commandBuffer)
 
         // Pass 1: Mesh
         encodeMeshPass(
@@ -100,12 +108,44 @@ public final class ShaderCanvasRenderer {
         )
     }
 
+    // MARK: - User Texture Loading
+
+    private func updateUserTextures(state: ShaderCanvasState) {
+        guard let dev = device else { return }
+        for slot in state.textureSlots {
+            guard let path = slot.filePath, !path.isEmpty else {
+                userTextures[slot.bindingIndex] = nil
+                loadedTexturePaths[slot.bindingIndex] = nil
+                continue
+            }
+            if loadedTexturePaths[slot.bindingIndex] == path { continue }
+
+            let url = URL(fileURLWithPath: path)
+            let loader = dev.textureLoader
+            let options: [MTKTextureLoader.Option: Any] = [
+                .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+                .textureStorageMode: MTLStorageMode.private.rawValue,
+                .SRGB: true
+            ]
+            if let texture = try? loader.newTexture(URL: url, options: options) {
+                userTextures[slot.bindingIndex] = texture
+                loadedTexturePaths[slot.bindingIndex] = path
+            }
+        }
+    }
+
     // MARK: - Shader Compilation
 
     private func updateShaders(state: ShaderCanvasState) {
         let (vertex, fragment) = state.activeMeshShaders
 
-        let meshHash = (vertex?.code.hashValue ?? 0) ^ (fragment?.code.hashValue ?? 0) ^ state.dataFlowConfig.hashValue
+        var hasher = Hasher()
+        hasher.combine(vertex?.code)
+        hasher.combine(fragment?.code)
+        hasher.combine(state.dataFlowConfig)
+        hasher.combine(state.helperFunctions)
+        hasher.combine(state.textureSlots.map(\.name))
+        let meshHash = hasher.finalize()
         if lastShaderHashes[Self.meshPipelineKey] != meshHash {
             compileMeshPipeline(state: state, vertex: vertex, fragment: fragment)
             lastShaderHashes[Self.meshPipelineKey] = meshHash
@@ -125,8 +165,23 @@ public final class ShaderCanvasRenderer {
 
         let config = state.dataFlowConfig
         let header = ShaderSnippets.generateSharedHeader(config: config)
-        let vertexSource = header + (vertex?.code ?? ShaderSnippets.generateDefaultVertexShader(config: config))
-        let fragmentSource = header + (fragment?.code ?? ShaderSnippets.defaultFragment)
+        let helpers = state.helperFunctions
+
+        var vertexCode = vertex?.code ?? ShaderSnippets.generateDefaultVertexShader(config: config)
+        vertexCode = ShaderSnippets.injectHelperFunctions(helpers, into: vertexCode)
+        let vertexSource = header + vertexCode
+
+        var fragmentCode = fragment?.code ?? ShaderSnippets.defaultFragment
+
+        let params = ShaderSnippets.parseParams(from: fragmentCode)
+        let paramHeader = ShaderSnippets.generateParamHeader(params: params)
+        if !params.isEmpty {
+            fragmentCode = ShaderSnippets.injectParamsBuffer(into: fragmentCode, paramCount: params.count)
+        }
+
+        fragmentCode = ShaderSnippets.injectHelperFunctions(helpers, into: fragmentCode)
+        fragmentCode = ShaderSnippets.injectTextureParams(into: fragmentCode, slots: state.textureSlots)
+        let fragmentSource = header + paramHeader + fragmentCode
 
         do {
             meshPipeline = try compiler.compilePipeline(
@@ -183,6 +238,17 @@ public final class ShaderCanvasRenderer {
 
     // MARK: - Pass Encoding
 
+    private func clearOffscreen(commandBuffer: MTLCommandBuffer) {
+        guard let target = offscreenA else { return }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = target
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].storeAction = .store
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        encoder.endEncoding()
+    }
+
     private func encodeMeshPass(
         state: ShaderCanvasState,
         commandBuffer: MTLCommandBuffer,
@@ -197,9 +263,8 @@ public final class ShaderCanvasRenderer {
 
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
-        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].loadAction = .load
         rpd.colorAttachments[0].storeAction = .store
-        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
         rpd.depthAttachment.texture = depth
         rpd.depthAttachment.loadAction = .clear
         rpd.depthAttachment.storeAction = .dontCare
@@ -233,6 +298,10 @@ public final class ShaderCanvasRenderer {
             if !packed.isEmpty {
                 encoder.setFragmentBytes(&packed, length: MemoryLayout<Float>.stride * packed.count, index: 2)
             }
+        }
+
+        for (index, texture) in userTextures {
+            encoder.setFragmentTexture(texture, index: index)
         }
 
         if let mesh = pool.mesh(for: state.meshType) {

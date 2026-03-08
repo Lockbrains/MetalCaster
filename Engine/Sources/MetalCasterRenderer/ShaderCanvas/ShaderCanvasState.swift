@@ -1,6 +1,21 @@
 import Foundation
 import simd
 
+/// A named texture slot that binds an image file to a Metal texture index.
+public struct TextureSlot: Codable, Sendable, Identifiable {
+    public let id: UUID
+    public var name: String
+    public var filePath: String?
+    public var bindingIndex: Int
+
+    public init(id: UUID = UUID(), name: String, filePath: String? = nil, bindingIndex: Int) {
+        self.id = id
+        self.name = name
+        self.filePath = filePath
+        self.bindingIndex = bindingIndex
+    }
+}
+
 /// Observable state container for a Shader Canvas workspace within the engine.
 /// Mirrors the macOSShaderCanvas state model but uses engine types.
 public final class ShaderCanvasState: @unchecked Sendable {
@@ -16,6 +31,12 @@ public final class ShaderCanvasState: @unchecked Sendable {
 
     /// User-defined parameter values, keyed by parameter name.
     public var paramValues: [String: [Float]] = [:]
+
+    /// Texture slots for binding images to fragment shader texture indices.
+    public var textureSlots: [TextureSlot] = []
+
+    /// User-defined helper functions injected between the header and main shader code.
+    public var helperFunctions: String = ""
 
     /// The currently selected shader layer for editing.
     public var editingShaderID: UUID?

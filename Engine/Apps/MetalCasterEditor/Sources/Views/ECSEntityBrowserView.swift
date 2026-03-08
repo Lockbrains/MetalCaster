@@ -12,7 +12,6 @@ struct ECSEntityBrowserView: View {
     @State private var activeFilters: Set<String> = []
     @State private var collapsedEntities: Set<Entity> = []
     @State private var collapsedCollections: Set<UUID> = []
-    @State private var selectedCollectionID: UUID? = nil
     @State private var dropTargetEntity: Entity? = nil
 
     var body: some View {
@@ -127,14 +126,14 @@ struct ECSEntityBrowserView: View {
                                 hasChildren: hasChildren,
                                 isCollapsed: collapsedEntities.contains(entity),
                                 onToggleCollapse: { toggleCollapse(entity) },
-                                onSelect: { selectedCollectionID = nil },
+                                onSelect: { state.selectedCollectionID = nil },
                                 world: world
                             )
                         case .collection(let collection):
                             CollectionRowView(
                                 collection: collection,
                                 isCollapsed: collapsedCollections.contains(collection.id),
-                                isSelected: selectedCollectionID == collection.id,
+                                isSelected: state.selectedCollectionID == collection.id,
                                 onSelect: { selectCollection(collection.id) },
                                 onToggle: { toggleCollapseCollection(collection.id) }
                             )
@@ -151,7 +150,7 @@ struct ECSEntityBrowserView: View {
             .focusEffectDisabled()
             .onKeyPress(.return) {
                 guard state.renameManager.target == nil else { return .ignored }
-                if let cid = selectedCollectionID {
+                if let cid = state.selectedCollectionID {
                     state.renamingCollectionID = cid
                     return .handled
                 }
@@ -188,7 +187,7 @@ struct ECSEntityBrowserView: View {
     }
 
     private func selectCollection(_ id: UUID) {
-        selectedCollectionID = id
+        state.selectedCollectionID = id
         state.selectedEntity = nil
         state.selectedAssetEntry = nil
     }

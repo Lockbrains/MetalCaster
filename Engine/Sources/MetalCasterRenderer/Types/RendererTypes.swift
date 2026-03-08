@@ -112,7 +112,7 @@ public enum MeshType: Equatable, Codable, Sendable {
 // MARK: - Active Shader
 
 /// Represents a single shader layer in the workspace.
-public struct ActiveShader: Identifiable, Codable, Sendable {
+public struct ActiveShader: Identifiable, Codable, Sendable, Equatable {
     public let id: UUID
     public let category: ShaderCategory
     public var name: String

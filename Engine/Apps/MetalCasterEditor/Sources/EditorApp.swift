@@ -117,6 +117,12 @@ struct MetalCasterEditorApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(editorState == nil)
 
+                Button("New Collection") {
+                    editorState?.createCollectionOrEntityInCollection()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(editorState == nil)
+
                 Divider()
 
                 Menu("Prefab") {
