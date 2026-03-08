@@ -1,9 +1,17 @@
 #if os(macOS)
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import MetalCasterRenderer
+import MetalCasterAsset
 
 // MARK: - Sidebar Container
+
+/// Represents a PP volume available in the scene.
+struct PPVolumeInfo: Identifiable, Equatable {
+    let id: UInt64
+    let name: String
+}
 
 /// The left sidebar of Shader Canvas: Layers + Data Flow + Parameters + Textures + Helpers.
 struct ShaderCanvasSidebar: View {
@@ -12,8 +20,12 @@ struct ShaderCanvasSidebar: View {
     @Binding var dataFlowConfig: DataFlowConfig
     @Binding var paramValues: [String: [Float]]
     @Binding var textureSlots: [TextureSlot]
-    @Binding var helperFunctions: String
+    @Binding var ppEnabled: Bool
+    @Binding var selectedPPVolumeID: UInt64?
+    var availablePPVolumes: [PPVolumeInfo]
+    @Binding var studioLightingEnabled: Bool
     var onRemoveShader: (ActiveShader) -> Void
+    var onImportTexture: (URL) -> String?
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -22,7 +34,6 @@ struct ShaderCanvasSidebar: View {
                 dataFlowPanel
                 texturesPanel
                 parametersPanel
-                helperFunctionsPanel
             }
         }
         .frame(width: 220)
@@ -32,9 +43,14 @@ struct ShaderCanvasSidebar: View {
 
     private var layersPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Layers")
-                .font(.headline).foregroundColor(.white)
-                .padding(.bottom, 4)
+            HStack(spacing: 6) {
+                Text("Layers")
+                    .font(.headline).foregroundColor(.white)
+                Spacer()
+                studioLightToggle
+                ppToggle
+            }
+            .padding(.bottom, 4)
 
             if activeShaders.isEmpty {
                 Text("No Active Shaders")
@@ -44,7 +60,7 @@ struct ShaderCanvasSidebar: View {
                 ForEach(activeShaders) { shader in
                     HStack {
                         Image(systemName: shader.category.icon)
-                            .foregroundColor(.blue)
+                            .foregroundColor(layerColor(for: shader.category))
                         Text(verbatim: shader.name)
                             .foregroundColor(.white)
                             .lineLimit(1)
@@ -75,6 +91,83 @@ struct ShaderCanvasSidebar: View {
         }
         .sidebarSection()
     }
+
+    // MARK: - Studio Lighting Toggle
+
+    private var studioLightToggle: some View {
+        Button { studioLightingEnabled.toggle() } label: {
+            Image(systemName: studioLightingEnabled ? "light.recessed.3.fill" : "light.recessed.3")
+                .font(.system(size: 12))
+                .foregroundColor(studioLightingEnabled ? .yellow : .white.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+        .help(studioLightingEnabled ? "Studio Lighting On" : "Studio Lighting Off")
+    }
+
+    // MARK: - Post Processing Toggle
+
+    @ViewBuilder
+    private var ppToggle: some View {
+        if availablePPVolumes.isEmpty {
+            Button {} label: {
+                Image(systemName: "camera.filters")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.2))
+            }
+            .buttonStyle(.plain)
+            .disabled(true)
+            .help("No Post Processing Volume in scene")
+        } else if availablePPVolumes.count == 1 {
+            Button { ppEnabled.toggle() } label: {
+                Image(systemName: "camera.filters")
+                    .font(.system(size: 12))
+                    .foregroundColor(ppEnabled ? .yellow : .white.opacity(0.4))
+            }
+            .buttonStyle(.plain)
+            .help(ppEnabled ? "Disable Post Processing" : "Enable Post Processing")
+        } else {
+            Menu {
+                Button {
+                    ppEnabled = false
+                    selectedPPVolumeID = nil
+                } label: {
+                    Label("Off", systemImage: ppEnabled ? "" : "checkmark")
+                }
+                Divider()
+                ForEach(availablePPVolumes) { vol in
+                    Button {
+                        selectedPPVolumeID = vol.id
+                        ppEnabled = true
+                    } label: {
+                        HStack {
+                            Text(vol.name)
+                            if ppEnabled && selectedPPVolumeID == vol.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "camera.filters")
+                    .font(.system(size: 12))
+                    .foregroundColor(ppEnabled ? .yellow : .white.opacity(0.4))
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 20)
+            .help("Post Processing Volume")
+        }
+    }
+
+    private func layerColor(for category: ShaderCategory) -> Color {
+        switch category {
+        case .helper: return .cyan
+        case .vertex: return .blue
+        case .fragment: return .purple
+        case .fullscreen: return .orange
+        }
+    }
+
+    @State private var isStructPreviewExpanded = false
 
     // MARK: - Data Flow Panel
 
@@ -109,6 +202,17 @@ struct ShaderCanvasSidebar: View {
 
             Divider().background(Color.white.opacity(0.2))
 
+            Text("TBN (Tangent Space)")
+                .font(.caption).foregroundColor(.white.opacity(0.6))
+                .padding(.top, 2)
+
+            Group {
+                dataFlowToggle(label: "Tangent", icon: "arrow.right", binding: $dataFlowConfig.tangentEnabled, locked: false)
+                dataFlowToggle(label: "Bitangent", icon: "arrow.up.right.and.arrow.down.left", binding: $dataFlowConfig.bitangentEnabled, locked: !dataFlowConfig.tangentEnabled)
+            }
+
+            Divider().background(Color.white.opacity(0.2))
+
             structPreview
         }
         .sidebarSection()
@@ -135,24 +239,36 @@ struct ShaderCanvasSidebar: View {
 
     private var structPreview: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Generated Structs")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.5))
-                Spacer()
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isStructPreviewExpanded.toggle() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isStructPreviewExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 8))
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Generated Structs")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.5))
+                    Spacer()
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            ScrollView {
-                Text(ShaderSnippets.generateStructPreview(config: dataFlowConfig))
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.green.opacity(0.8))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if isStructPreviewExpanded {
+                ScrollView {
+                    Text(ShaderSnippets.generateStructPreview(config: dataFlowConfig))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.green.opacity(0.8))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .padding(6)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(6)
+                .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .top)))
             }
-            .frame(maxHeight: 160)
-            .padding(6)
-            .background(Color.black.opacity(0.5))
-            .cornerRadius(6)
         }
     }
 
@@ -320,6 +436,8 @@ struct ShaderCanvasSidebar: View {
 
     // MARK: - Textures Panel
 
+    private static let acceptedImageTypes: [UTType] = [.png, .jpeg, .tiff]
+
     private var texturesPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -333,60 +451,107 @@ struct ShaderCanvasSidebar: View {
                 }.buttonStyle(.plain).help("Add texture slot")
             }
 
+            Text("Bound to fragment_main via [[texture(N)]]")
+                .font(.system(size: 9))
+                .foregroundColor(.white.opacity(0.35))
+                .padding(.bottom, 2)
+
             if textureSlots.isEmpty {
-                Text("No textures bound.\nAdd a slot and assign an image file.")
+                Text("No textures bound.\nDrag an image here or add a slot.")
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.4))
                     .padding(.vertical, 4)
             } else {
                 ForEach($textureSlots) { $slot in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("[\(slot.bindingIndex)]")
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundColor(.cyan.opacity(0.7))
-                            TextField("name", text: $slot.name)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(.white)
-                            Spacer()
-                            Button { removeTextureSlot(slot) } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.red.opacity(0.7))
-                            }.buttonStyle(.plain)
-                        }
-
-                        Button {
-                            let panel = NSOpenPanel()
-                            panel.title = "Choose Texture"
-                            panel.allowedContentTypes = [.png, .jpeg, .tiff]
-                            panel.allowsMultipleSelection = false
-                            if panel.runModal() == .OK, let url = panel.url {
-                                slot.filePath = url.path
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: slot.filePath != nil ? "photo.fill" : "photo")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(slot.filePath != nil ? .green : .white.opacity(0.5))
-                                Text(slot.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose file...")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(Color.white.opacity(0.06))
-                            .cornerRadius(4)
-                        }.buttonStyle(.plain)
-                    }
-                    .padding(6)
-                    .background(Color.black.opacity(0.3))
-                    .cornerRadius(6)
+                    textureSlotRow(slot: $slot)
                 }
             }
         }
         .sidebarSection()
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            handleTextureDrop(providers: providers, intoSlot: nil)
+        }
+    }
+
+    private func textureSlotRow(slot: Binding<TextureSlot>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("[\(slot.wrappedValue.bindingIndex)]")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(.cyan.opacity(0.7))
+                TextField("name", text: slot.name)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.white)
+                Spacer()
+                Button { removeTextureSlot(slot.wrappedValue) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.red.opacity(0.7))
+                }.buttonStyle(.plain)
+            }
+
+            Button {
+                pickTextureFile { path in slot.wrappedValue.filePath = path }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: slot.wrappedValue.filePath != nil ? "photo.fill" : "photo")
+                        .font(.system(size: 10))
+                        .foregroundColor(slot.wrappedValue.filePath != nil ? .green : .white.opacity(0.5))
+                    Text(slot.wrappedValue.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Choose or drag image...")
+                        .font(.system(size: 9))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Color.white.opacity(0.06))
+                .cornerRadius(4)
+            }.buttonStyle(.plain)
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.3))
+        .cornerRadius(6)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            handleTextureDrop(providers: providers, intoSlot: slot)
+        }
+    }
+
+    private func pickTextureFile(completion: @escaping (String) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = "Import Texture"
+        panel.allowedContentTypes = Self.acceptedImageTypes
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            if let path = onImportTexture(url) {
+                completion(path)
+            }
+        }
+    }
+
+    private func handleTextureDrop(providers: [NSItemProvider], intoSlot slot: Binding<TextureSlot>?) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+            guard let url else { return }
+            let ext = url.pathExtension.lowercased()
+            guard AssetCategory.textures.acceptedExtensions.contains(ext) else { return }
+            DispatchQueue.main.async {
+                if let path = onImportTexture(url) {
+                    if let slot {
+                        slot.wrappedValue.filePath = path
+                    } else {
+                        let usedIndices = Set(textureSlots.map(\.bindingIndex))
+                        var nextIndex = 0
+                        while usedIndices.contains(nextIndex) { nextIndex += 1 }
+                        let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                        textureSlots.append(TextureSlot(name: name, bindingIndex: nextIndex))
+                        if let idx = textureSlots.indices.last {
+                            textureSlots[idx].filePath = path
+                        }
+                    }
+                }
+            }
+        }
+        return true
     }
 
     private func addTextureSlot() {
@@ -398,43 +563,6 @@ struct ShaderCanvasSidebar: View {
 
     private func removeTextureSlot(_ slot: TextureSlot) {
         textureSlots.removeAll { $0.id == slot.id }
-    }
-
-    // MARK: - Helper Functions Panel
-
-    @State private var isHelperExpanded = false
-
-    private var helperFunctionsPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Helper Functions")
-                    .font(.headline).foregroundColor(.white)
-                Spacer()
-                Button {
-                    withAnimation { isHelperExpanded.toggle() }
-                } label: {
-                    Image(systemName: isHelperExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.5))
-                }.buttonStyle(.plain)
-            }
-
-            Text("Shared MSL functions injected before shader code")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.4))
-
-            if isHelperExpanded {
-                TextEditor(text: $helperFunctions)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.white)
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 120)
-                    .padding(4)
-                    .background(Color.black.opacity(0.5))
-                    .cornerRadius(6)
-            }
-        }
-        .sidebarSection()
     }
 
     // MARK: - Parameter Helpers

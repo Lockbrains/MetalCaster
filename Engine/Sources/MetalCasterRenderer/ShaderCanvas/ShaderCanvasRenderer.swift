@@ -31,6 +31,15 @@ public final class ShaderCanvasRenderer {
     private var userTextures: [Int: MTLTexture] = [:]
     private var loadedTexturePaths: [Int: String] = [:]
 
+    /// Source image for fullscreen-only mode.
+    private var sourceTexture: MTLTexture?
+    private var loadedSourcePath: String?
+    private var offscreenBlitPipeline: MTLRenderPipelineState?
+    private var hdrBlitPipeline: MTLRenderPipelineState?
+
+    /// Engine post-processing stack for preview.
+    private var postProcessStack: PostProcessStack?
+
     // MARK: - Tracking
 
     private static let meshPipelineKey = UUID()
@@ -38,6 +47,13 @@ public final class ShaderCanvasRenderer {
     private var currentWidth: Int = 0
     private var currentHeight: Int = 0
     private var startTime = CFAbsoluteTimeGetCurrent()
+
+    /// Cached fragment shader param parse results.
+    private var cachedFragmentParams: [ShaderParam] = []
+    private var cachedFragmentParamHash: Int = 0
+
+    /// FPS tracking for the Shader Canvas viewport.
+    private var frameTimestamps: [CFAbsoluteTime] = []
 
     public init() {}
 
@@ -49,6 +65,13 @@ public final class ShaderCanvasRenderer {
         self.meshPool = MeshPool(device: metalDevice.device)
         self.shaderCompiler = ShaderCompiler(device: metalDevice.device)
         compileBlit()
+    }
+
+    private func ensurePostProcessStack() -> PostProcessStack? {
+        if postProcessStack == nil, let dev = device {
+            postProcessStack = PostProcessStack(device: dev.device)
+        }
+        return postProcessStack
     }
 
     // MARK: - Render
@@ -63,11 +86,17 @@ public final class ShaderCanvasRenderer {
               let _ = meshPool,
               let drawable = view.currentDrawable else { return }
 
+        let now = CFAbsoluteTimeGetCurrent()
+        frameTimestamps.append(now)
+        frameTimestamps.removeAll { now - $0 > 1.0 }
+        state.currentFPS = frameTimestamps.count
+
         let w = Int(view.drawableSize.width)
         let h = Int(view.drawableSize.height)
         ensureTextures(width: w, height: h)
 
         updateUserTextures(state: state)
+        updateSourceImage(state: state)
         updateShaders(state: state)
 
         let time = Float(CFAbsoluteTimeGetCurrent() - startTime)
@@ -75,6 +104,13 @@ public final class ShaderCanvasRenderer {
 
         // Always clear offscreenA so the blit never reads uninitialized content
         clearOffscreen(commandBuffer: commandBuffer)
+
+        // If in fullscreen-only mode with a source image, blit it to offscreenA
+        if meshPipeline == nil, let src = sourceTexture, let dst = offscreenA,
+           let blit = offscreenBlitPipeline {
+            encodeImageBlit(commandBuffer: commandBuffer, pipeline: blit,
+                            source: src, dest: dst)
+        }
 
         // Pass 1: Mesh
         encodeMeshPass(
@@ -100,12 +136,28 @@ public final class ShaderCanvasRenderer {
             swap(&source, &dest)
         }
 
-        // Final blit to drawable
-        encodeBlitPass(
-            commandBuffer: commandBuffer,
-            sourceTexture: source ?? offscreenA,
-            drawableTexture: drawable.texture
-        )
+        // Engine post-processing preview (from scene volumes)
+        if state.postProcessEnabled, let ppSettings = state.postProcessSettings,
+           let ppStack = ensurePostProcessStack() {
+            ppStack.ensureTextures(width: w, height: h)
+            if let src = source ?? offscreenA, let ppInput = ppStack.sceneColorTexture,
+               let blit = hdrBlitPipeline {
+                encodeImageBlit(commandBuffer: commandBuffer, pipeline: blit,
+                                source: src, dest: ppInput)
+            }
+            ppStack.executeVolume(
+                commandBuffer: commandBuffer,
+                drawableTexture: drawable.texture,
+                settings: ppSettings
+            )
+        } else {
+            // Final blit to drawable
+            encodeBlitPass(
+                commandBuffer: commandBuffer,
+                sourceTexture: source ?? offscreenA,
+                drawableTexture: drawable.texture
+            )
+        }
     }
 
     // MARK: - User Texture Loading
@@ -165,6 +217,7 @@ public final class ShaderCanvasRenderer {
 
         let config = state.dataFlowConfig
         let header = ShaderSnippets.generateSharedHeader(config: config)
+        let studioPreamble = ShaderSnippets.studioLightPreamble
         let helpers = state.helperFunctions
 
         var vertexCode = vertex?.code ?? ShaderSnippets.generateDefaultVertexShader(config: config)
@@ -181,15 +234,15 @@ public final class ShaderCanvasRenderer {
 
         fragmentCode = ShaderSnippets.injectHelperFunctions(helpers, into: fragmentCode)
         fragmentCode = ShaderSnippets.injectTextureParams(into: fragmentCode, slots: state.textureSlots)
-        let fragmentSource = header + paramHeader + fragmentCode
+        let fragmentSource = header + studioPreamble + paramHeader + fragmentCode
 
         do {
             meshPipeline = try compiler.compilePipeline(
                 vertexSource: vertexSource,
                 fragmentSource: fragmentSource,
-                colorFormat: .bgra8Unorm_srgb,
+                colorFormat: .bgra8Unorm,
                 depthFormat: .depth32Float,
-                vertexDescriptor: MeshPool.metalVertexDescriptor
+                vertexDescriptor: MeshPool.extendedMetalVertexDescriptor
             )
             state.compilationError = nil
         } catch {
@@ -202,7 +255,7 @@ public final class ShaderCanvasRenderer {
         do {
             let pipeline = try compiler.compileFullscreenPipeline(
                 source: shader.code,
-                colorFormat: .bgra8Unorm_srgb
+                colorFormat: .bgra8Unorm
             )
             fullscreenPipelines[shader.id] = pipeline
         } catch {
@@ -234,9 +287,52 @@ public final class ShaderCanvasRenderer {
         }
         """
         blitPipeline = try? compiler.compileFullscreenPipeline(source: blitSource, colorFormat: .bgra8Unorm_srgb)
+        offscreenBlitPipeline = try? compiler.compileFullscreenPipeline(source: blitSource, colorFormat: .bgra8Unorm)
+        hdrBlitPipeline = try? compiler.compileFullscreenPipeline(source: blitSource, colorFormat: .rgba16Float)
+    }
+
+    // MARK: - Source Image Loading
+
+    private func updateSourceImage(state: ShaderCanvasState) {
+        guard let dev = device else { return }
+        guard let path = state.sourceImagePath, !path.isEmpty else {
+            sourceTexture = nil
+            loadedSourcePath = nil
+            return
+        }
+        if loadedSourcePath == path { return }
+
+        let url = URL(fileURLWithPath: path)
+        let options: [MTKTextureLoader.Option: Any] = [
+            .textureUsage: MTLTextureUsage.shaderRead.rawValue,
+            .textureStorageMode: MTLStorageMode.private.rawValue,
+            .SRGB: false
+        ]
+        if let texture = try? dev.textureLoader.newTexture(URL: url, options: options) {
+            sourceTexture = texture
+            loadedSourcePath = path
+        }
     }
 
     // MARK: - Pass Encoding
+
+    private func encodeImageBlit(
+        commandBuffer: MTLCommandBuffer,
+        pipeline: MTLRenderPipelineState,
+        source: MTLTexture,
+        dest: MTLTexture
+    ) {
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = dest
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].storeAction = .store
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setFragmentTexture(source, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+    }
 
     private func clearOffscreen(commandBuffer: MTLCommandBuffer) {
         guard let target = offscreenA else { return }
@@ -276,25 +372,30 @@ public final class ShaderCanvasRenderer {
         encoder.setFrontFacing(.counterClockwise)
         encoder.setCullMode(.back)
 
+        let eye = SIMD3<Float>(0, 0, 8)
         let projection = perspectiveProjection(fovY: Float.pi / 4, aspect: aspect, near: 0.1, far: 100)
-        let view = lookAt(eye: SIMD3<Float>(0, 0, 3), center: .zero, up: SIMD3<Float>(0, 1, 0))
-        let model = matrix_identity_float4x4
+        let view = lookAt(eye: eye, center: .zero, up: SIMD3<Float>(0, 1, 0))
+        let model = rotationMatrix(yaw: state.modelYaw, pitch: state.modelPitch)
 
         var uniforms = Uniforms(
             mvpMatrix: projection * view * model,
             modelMatrix: model,
             normalMatrix: model,
-            cameraPosition: SIMD4<Float>(0, 0, 3, 0),
+            cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
             time: time
         )
+        uniforms._pad0 = state.studioLightingEnabled ? 1.0 : 0.0
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
 
-        // Pack user parameters
-        let params = ShaderSnippets.parseParams(
-            from: state.activeMeshShaders.fragment?.code ?? ""
-        )
-        if !params.isEmpty {
-            var packed = ShaderSnippets.packParamBuffer(params: params, values: state.paramValues)
+        let fragCode = state.activeMeshShaders.fragment?.code ?? ""
+        let fragHash = fragCode.hashValue
+        if fragHash != cachedFragmentParamHash {
+            cachedFragmentParams = ShaderSnippets.parseParams(from: fragCode)
+            cachedFragmentParamHash = fragHash
+        }
+        if !cachedFragmentParams.isEmpty {
+            var packed = ShaderSnippets.packParamBuffer(params: cachedFragmentParams, values: state.paramValues)
             if !packed.isEmpty {
                 encoder.setFragmentBytes(&packed, length: MemoryLayout<Float>.stride * packed.count, index: 2)
             }
@@ -304,11 +405,17 @@ public final class ShaderCanvasRenderer {
             encoder.setFragmentTexture(texture, index: index)
         }
 
-        if let mesh = pool.mesh(for: state.meshType) {
+        if let mesh = pool.meshExtended(for: state.meshType) {
             MeshRenderer.draw(mesh: mesh, with: encoder)
         }
 
         encoder.endEncoding()
+    }
+
+    /// Layout must match the fullscreen shader's `Uniforms { float4x4; float; }`.
+    private struct FullscreenUniforms {
+        var modelViewProjectionMatrix: simd_float4x4 = matrix_identity_float4x4
+        var time: Float = 0
     }
 
     private func encodeFullscreenPass(
@@ -327,8 +434,9 @@ public final class ShaderCanvasRenderer {
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(sourceTexture, index: 0)
 
-        var ppTime = time
-        encoder.setFragmentBytes(&ppTime, length: MemoryLayout<Float>.stride, index: 1)
+        var ppUniforms = FullscreenUniforms(time: time)
+        encoder.setVertexBytes(&ppUniforms, length: MemoryLayout<FullscreenUniforms>.stride, index: 1)
+        encoder.setFragmentBytes(&ppUniforms.time, length: MemoryLayout<Float>.stride, index: 1)
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
@@ -366,6 +474,24 @@ public final class ShaderCanvasRenderer {
     }
 
     // MARK: - Math Helpers
+
+    private func rotationMatrix(yaw: Float, pitch: Float) -> simd_float4x4 {
+        let cy = cos(yaw);  let sy = sin(yaw)
+        let cp = cos(pitch); let sp = sin(pitch)
+        let rotY = simd_float4x4(columns: (
+            SIMD4<Float>(cy, 0, sy, 0),
+            SIMD4<Float>(0, 1, 0, 0),
+            SIMD4<Float>(-sy, 0, cy, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
+        let rotX = simd_float4x4(columns: (
+            SIMD4<Float>(1, 0, 0, 0),
+            SIMD4<Float>(0, cp, -sp, 0),
+            SIMD4<Float>(0, sp, cp, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        ))
+        return rotY * rotX
+    }
 
     private func perspectiveProjection(fovY: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
         let sy = 1 / tan(fovY * 0.5)

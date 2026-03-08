@@ -185,10 +185,16 @@ public final class GameViewRenderer: NSObject, MTKViewDelegate {
                 )
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
 
+                if drawCall.material.unifiedShaderSource != nil {
+                    encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                }
+
+                var customPSOActive = false
                 if let materialPSO = resolveMaterialPipeline(
                     for: drawCall.material, device: device, useHDR: usePostProcess
                 ) {
                     encoder.setRenderPipelineState(materialPSO)
+                    customPSOActive = true
                     let rs = drawCall.material.renderState
                     encoder.setCullMode(rs.cullMode.metalCullMode)
                     if let dss = materialPipelineCache?.depthStencilState(for: rs, device: device.device) {
@@ -216,7 +222,14 @@ public final class GameViewRenderer: NSObject, MTKViewDelegate {
 
                 bindCustomShaderParams(encoder: encoder, material: drawCall.material)
 
-                if let mesh = pool.mesh(for: drawCall.meshType) {
+                let useExtendedMesh = customPSOActive
+                    && drawCall.material.unifiedShaderSource != nil
+                    && (drawCall.material.dataFlowConfig.tangentEnabled
+                        || drawCall.material.dataFlowConfig.bitangentEnabled)
+                let mesh = useExtendedMesh
+                    ? pool.meshExtended(for: drawCall.meshType)
+                    : pool.mesh(for: drawCall.meshType)
+                if let mesh {
                     MeshRenderer.draw(mesh: mesh, with: encoder)
                 }
             }
@@ -303,13 +316,18 @@ public final class GameViewRenderer: NSObject, MTKViewDelegate {
         let cacheKey = material.pipelineCacheKey.withHDR(useHDR)
 
         if let unified = material.unifiedShaderSource {
-            return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
+            let needsExtended = material.dataFlowConfig.tangentEnabled
+                || material.dataFlowConfig.bitangentEnabled
+            let vtxDesc = needsExtended
+                ? MeshPool.extendedMetalVertexDescriptor
+                : MeshPool.metalVertexDescriptor
+            return materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
                 try shaderCompiler!.compileUnifiedPipeline(
                     source: unified,
                     renderState: material.renderState,
                     colorFormat: colorFormat,
                     depthFormat: .depth32Float,
-                    vertexDescriptor: MeshPool.metalVertexDescriptor
+                    vertexDescriptor: vtxDesc
                 )
             }
         }
@@ -322,7 +340,7 @@ public final class GameViewRenderer: NSObject, MTKViewDelegate {
             ?? ShaderSnippets.generateDefaultVertexShader(config: config))
         let fragmentSource = header + material.fragmentShaderSource
 
-        return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
+        return materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
             try shaderCompiler!.compilePipeline(
                 vertexSource: vertexSource,
                 fragmentSource: fragmentSource,

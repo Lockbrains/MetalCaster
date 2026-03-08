@@ -156,27 +156,6 @@ struct EditorContentView: View {
                     .frame(minWidth: 600, idealWidth: 700, minHeight: 550, idealHeight: 650)
             }
         }
-        .alert(
-            "Install Xcode Integration",
-            isPresented: Binding(
-                get: { state.showXcodeIntegrationPrompt },
-                set: { state.showXcodeIntegrationPrompt = $0 }
-            )
-        ) {
-            Button("Install") {
-                state.installXcodeIntegration()
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Skip", role: .cancel) {
-                state.showXcodeIntegrationPrompt = false
-            }
-        } message: {
-            if let error = state.xcodeIntegrationError {
-                Text("Failed: \(error)")
-            } else {
-                Text("Install .prompt syntax highlighting into Xcode? This enables colored comments, keywords, and bracket content when editing Prompt Scripts. Requires admin privileges and a restart of Xcode.")
-            }
-        }
     }
 
     private var sceneEditorPanelTitle: some View {

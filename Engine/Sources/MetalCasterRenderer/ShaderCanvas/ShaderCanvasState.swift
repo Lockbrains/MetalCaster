@@ -47,6 +47,25 @@ public final class ShaderCanvasState: @unchecked Sendable {
     /// Whether the canvas has unsaved changes.
     public var isDirty: Bool = false
 
+    /// Model rotation controlled by right-mouse drag.
+    public var modelYaw: Float = 0
+    public var modelPitch: Float = 0
+
+    /// Source image path for fullscreen-only mode.
+    public var sourceImagePath: String?
+
+    /// Whether studio 3-point lighting is active for preview.
+    public var studioLightingEnabled: Bool = true
+
+    /// Whether to apply engine post-processing after the canvas render.
+    public var postProcessEnabled: Bool = false
+
+    /// The resolved post-process settings from the selected scene volume.
+    public var postProcessSettings: VolumePostProcessSettings?
+
+    /// Current measured FPS for the Shader Canvas viewport.
+    public var currentFPS: Int = 0
+
     public init() {}
 
     // MARK: - Layer Management

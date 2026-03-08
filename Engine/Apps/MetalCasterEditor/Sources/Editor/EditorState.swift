@@ -243,8 +243,6 @@ public final class EditorState {
 
     public let promptFileWatcher = PromptFileWatcher()
     public var promptCompileStatuses: [String: PromptCompileStatus] = [:]
-    public var showXcodeIntegrationPrompt: Bool = false
-    public var xcodeIntegrationError: String? = nil
     public var editingPromptURL: URL? = nil
 
     // MARK: - Version Control
@@ -297,6 +295,9 @@ public final class EditorState {
 
     public var showGrid: Bool = true
     public var invertPan: Bool = true
+
+    /// Updated by ViewportCoordinator every frame. Excluded from observation to prevent per-frame SwiftUI rebuilds.
+    @ObservationIgnored public var viewportFPS: Int = 0
 
     // MARK: - Scene Editor Camera
 
@@ -463,7 +464,6 @@ public final class EditorState {
 
         setupAgentSystem()
         setupPromptFileWatcher()
-        checkXcodeIntegration()
     }
 
     private func setupAgentSystem() {
@@ -1125,25 +1125,6 @@ public final class EditorState {
 
     // MARK: - Prompt Script Operations
 
-    private func checkXcodeIntegration() {
-        #if os(macOS)
-        if XcodePromptIntegration.shouldPrompt {
-            showXcodeIntegrationPrompt = true
-        }
-        #endif
-    }
-
-    public func installXcodeIntegration() {
-        #if os(macOS)
-        if let error = XcodePromptIntegration.install() {
-            xcodeIntegrationError = error
-        } else {
-            showXcodeIntegrationPrompt = false
-            xcodeIntegrationError = nil
-        }
-        #endif
-    }
-
     private func setupPromptFileWatcher() {
         guard let gameplayDir = projectManager.directoryURL(for: .gameplay) else { return }
         promptFileWatcher.onPromptChanged = { [weak self] url in
@@ -1404,6 +1385,22 @@ public final class EditorState {
             }
         } catch {
             print("[MetalCaster] Failed to load material asset: \(error)")
+        }
+    }
+
+    /// Re-applies an updated material to all entities currently using it (matched by name).
+    /// Also invalidates the pipeline cache so the new shader gets compiled.
+    public func reloadMaterialOnEntities(from url: URL, material: MCMaterial) {
+        let entities = engine.world.entitiesWith(MaterialComponent.self)
+        for entity in entities {
+            guard let mc = engine.world.getComponent(MaterialComponent.self, from: entity) else { continue }
+            if mc.material.name == material.name {
+                updateComponent(MaterialComponent.self, on: entity) { $0.material = material }
+            }
+        }
+        if let entry = selectedAssetEntry, entry.fileExtension == "mcmat" {
+            editingMaterialAsset = material
+            editingMaterialAssetURL = url
         }
     }
 

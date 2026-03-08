@@ -5,6 +5,7 @@ import simd
 
 /// Represents the three types of shader layers supported by the rendering pipeline.
 public enum ShaderCategory: String, CaseIterable, Identifiable, Codable, Sendable {
+    case helper = "Helper"
     case vertex = "Vertex"
     case fragment = "Fragment"
     case fullscreen = "Fullscreen"
@@ -13,6 +14,7 @@ public enum ShaderCategory: String, CaseIterable, Identifiable, Codable, Sendabl
 
     public var icon: String {
         switch self {
+        case .helper: return "function"
         case .vertex: return "move.3d"
         case .fragment: return "paintbrush.fill"
         case .fullscreen: return "display"
@@ -136,6 +138,8 @@ public struct DataFlowConfig: Codable, Equatable, Hashable, Sendable {
     public var worldPositionEnabled: Bool
     public var worldNormalEnabled: Bool
     public var viewDirectionEnabled: Bool
+    public var tangentEnabled: Bool
+    public var bitangentEnabled: Bool
 
     public init(
         normalEnabled: Bool = true,
@@ -143,7 +147,9 @@ public struct DataFlowConfig: Codable, Equatable, Hashable, Sendable {
         timeEnabled: Bool = true,
         worldPositionEnabled: Bool = false,
         worldNormalEnabled: Bool = false,
-        viewDirectionEnabled: Bool = false
+        viewDirectionEnabled: Bool = false,
+        tangentEnabled: Bool = false,
+        bitangentEnabled: Bool = false
     ) {
         self.normalEnabled = normalEnabled
         self.uvEnabled = uvEnabled
@@ -151,13 +157,30 @@ public struct DataFlowConfig: Codable, Equatable, Hashable, Sendable {
         self.worldPositionEnabled = worldPositionEnabled
         self.worldNormalEnabled = worldNormalEnabled
         self.viewDirectionEnabled = viewDirectionEnabled
+        self.tangentEnabled = tangentEnabled
+        self.bitangentEnabled = bitangentEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        normalEnabled = try container.decodeIfPresent(Bool.self, forKey: .normalEnabled) ?? true
+        uvEnabled = try container.decodeIfPresent(Bool.self, forKey: .uvEnabled) ?? true
+        timeEnabled = try container.decodeIfPresent(Bool.self, forKey: .timeEnabled) ?? true
+        worldPositionEnabled = try container.decodeIfPresent(Bool.self, forKey: .worldPositionEnabled) ?? false
+        worldNormalEnabled = try container.decodeIfPresent(Bool.self, forKey: .worldNormalEnabled) ?? false
+        viewDirectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .viewDirectionEnabled) ?? false
+        tangentEnabled = try container.decodeIfPresent(Bool.self, forKey: .tangentEnabled) ?? false
+        bitangentEnabled = try container.decodeIfPresent(Bool.self, forKey: .bitangentEnabled) ?? false
     }
 
     public mutating func resolveDependencies() {
         if worldNormalEnabled && !normalEnabled { normalEnabled = true }
         if viewDirectionEnabled && !worldPositionEnabled { worldPositionEnabled = true }
+        if bitangentEnabled && !tangentEnabled { tangentEnabled = true }
+        if bitangentEnabled && !normalEnabled { normalEnabled = true }
         if !normalEnabled { worldNormalEnabled = false }
         if !worldPositionEnabled { viewDirectionEnabled = false }
+        if !tangentEnabled { bitangentEnabled = false }
     }
 }
 

@@ -55,7 +55,7 @@ enum ShaderCanvasTemplate: String, CaseIterable, Identifiable {
     var dataFlowSummary: String {
         switch self {
         case .fullscreenMaterial: return "Time"
-        case .litMaterial:        return "Normal, UV, Time, World Position, World Normal, View Direction"
+        case .litMaterial:        return "Normal, UV, Time, World Pos/Normal, View Dir, Tangent, Bitangent"
         case .unlitMaterial:      return "Normal, UV, Time"
         case .empty:              return "Normal, UV, Time (default)"
         }
@@ -68,7 +68,8 @@ enum ShaderCanvasTemplate: String, CaseIterable, Identifiable {
         case .litMaterial:
             return DataFlowConfig(
                 normalEnabled: true, uvEnabled: true, timeEnabled: true,
-                worldPositionEnabled: true, worldNormalEnabled: true, viewDirectionEnabled: true
+                worldPositionEnabled: true, worldNormalEnabled: true, viewDirectionEnabled: true,
+                tangentEnabled: true, bitangentEnabled: true
             )
         case .unlitMaterial:
             return DataFlowConfig(normalEnabled: true, uvEnabled: true, timeEnabled: true)
@@ -135,7 +136,7 @@ struct ShaderCanvasTemplatePicker: View {
             Image(systemName: "paintbrush.pointed")
                 .font(.system(size: 14))
                 .foregroundStyle(MCTheme.statusBlue)
-            Text("Choose a template for your new shader:")
+            Text("Shader Canvas Pro — Choose a template:")
                 .font(MCTheme.fontTitle)
                 .foregroundStyle(MCTheme.textPrimary)
             Spacer()

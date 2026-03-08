@@ -236,16 +236,64 @@ extension MCMaterial {
     ///
     /// Extracts the active vertex and fragment shaders, combines them with the
     /// shared header from DataFlowConfig, and packages parameters into a material.
+    /// Creates an MCMaterial from a Shader Canvas Pro document.
+    /// Generates a self-contained `unifiedShaderSource` that includes all
+    /// required definitions (header, studio lighting, helpers, params).
     public init(from document: CanvasDocument) {
-        let vertexShader = document.shaders.last(where: { $0.category == .vertex })
-        let fragmentShader = document.shaders.last(where: { $0.category == .fragment })
+        let vertexCode = document.shaders.last(where: { $0.category == .vertex })?.code
+        let fragmentCode = document.shaders.last(where: { $0.category == .fragment })?.code ?? ""
         let fullscreenShaders = document.shaders.filter { $0.category == .fullscreen }
+        let helpers = document.shaders
+            .filter { $0.category == .helper }
+            .map(\.code)
+            .joined(separator: "\n\n")
+
+        let hasMeshShaders = !fragmentCode.isEmpty || vertexCode != nil
+
+        var unified: String? = nil
+        if hasMeshShaders {
+            var src = ShaderSnippets.generateSharedHeader(config: document.dataFlow)
+
+            let needsStudioPreamble = fragmentCode.contains("studioLights")
+                || fragmentCode.contains("studioLightCount")
+                || fragmentCode.contains("StudioLight")
+            if needsStudioPreamble {
+                src += ShaderSnippets.studioLightPreamble + "\n"
+            }
+
+            if !helpers.isEmpty {
+                src += "\n// === Helper Functions ===\n" + helpers + "\n// === End Helpers ===\n\n"
+            }
+
+            let params = ShaderSnippets.parseParams(from: fragmentCode)
+            src += ShaderSnippets.generateParamHeader(params: params)
+
+            src += vertexCode ?? ShaderSnippets.generateDefaultVertexShader(config: document.dataFlow)
+            src += "\n\n"
+
+            // Inject `constant float *params [[buffer(2)]]` into fragment_main
+            // if params exist but the signature doesn't already declare it.
+            var processedFragment = fragmentCode
+            if !params.isEmpty {
+                processedFragment = ShaderSnippets.injectParamsBuffer(
+                    into: processedFragment, paramCount: params.count)
+            }
+
+            // Remap fragment params buffer from Canvas convention (index 2)
+            // to main editor convention (index 5).
+            let adaptedFragment = processedFragment
+                .replacingOccurrences(of: "[[buffer(2)]]", with: "[[buffer(5)]]")
+            src += adaptedFragment
+
+            unified = src
+        }
 
         self.init(
             name: document.name,
             materialType: .custom,
-            vertexShaderSource: vertexShader?.code,
-            fragmentShaderSource: fragmentShader?.code ?? "",
+            vertexShaderSource: vertexCode,
+            fragmentShaderSource: fragmentCode,
+            unifiedShaderSource: unified,
             postProcessSources: fullscreenShaders.map { $0.code },
             parameters: document.paramValues,
             dataFlowConfig: document.dataFlow

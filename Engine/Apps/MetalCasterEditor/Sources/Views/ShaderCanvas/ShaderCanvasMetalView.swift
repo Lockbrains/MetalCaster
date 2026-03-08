@@ -3,8 +3,25 @@ import SwiftUI
 import MetalKit
 import MetalCasterRenderer
 
+/// Custom MTKView subclass that handles right-mouse drag for arcball rotation.
+final class InteractiveCanvasMTKView: MTKView {
+    var canvasState: ShaderCanvasState?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard let state = canvasState else { return }
+        let sensitivity: Float = 0.008
+        state.modelYaw += Float(event.deltaX) * sensitivity
+        state.modelPitch = max(-.pi / 2 + 0.01,
+                               min(.pi / 2 - 0.01,
+                                   state.modelPitch + Float(event.deltaY) * sensitivity))
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// NSViewRepresentable bridge between SwiftUI and the engine's ShaderCanvasRenderer.
-/// Wraps an MTKView and forwards state changes to the renderer each frame.
 struct ShaderCanvasMetalView: NSViewRepresentable {
 
     var canvasState: ShaderCanvasState
@@ -13,8 +30,8 @@ struct ShaderCanvasMetalView: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> MTKView {
-        let mtkView = MTKView()
+    func makeNSView(context: Context) -> InteractiveCanvasMTKView {
+        let mtkView = InteractiveCanvasMTKView()
         guard let device = MTLCreateSystemDefaultDevice() else { return mtkView }
 
         mtkView.device = device
@@ -22,6 +39,7 @@ struct ShaderCanvasMetalView: NSViewRepresentable {
         mtkView.depthStencilPixelFormat = .depth32Float
         mtkView.clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
         mtkView.preferredFramesPerSecond = 60
+        mtkView.canvasState = canvasState
 
         let metalDevice = MCMetalDevice(device: device)
         let renderer = ShaderCanvasRenderer()
@@ -36,7 +54,8 @@ struct ShaderCanvasMetalView: NSViewRepresentable {
         return mtkView
     }
 
-    func updateNSView(_ nsView: MTKView, context: Context) {
+    func updateNSView(_ nsView: InteractiveCanvasMTKView, context: Context) {
+        nsView.canvasState = canvasState
         context.coordinator.delegate?.canvasState = canvasState
     }
 

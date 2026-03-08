@@ -9,6 +9,8 @@ public final class PipelineCache {
 
     private var cache: [String: MTLRenderPipelineState] = [:]
     private var materialCache: [PipelineCacheKey: MTLRenderPipelineState] = [:]
+    public var materialCacheCount: Int { materialCache.count }
+    private var failedKeys: Set<PipelineCacheKey> = []
     private var depthStencilCache: [String: MTLDepthStencilState] = [:]
     private let compiler: ShaderCompiler
 
@@ -39,21 +41,29 @@ public final class PipelineCache {
     // MARK: - Material-Keyed
 
     /// Gets a cached pipeline for a material or compiles a new one.
+    /// Failed compilations are recorded to avoid retrying every frame.
     public func getOrCompile(
         materialKey: PipelineCacheKey,
         compile: () throws -> MTLRenderPipelineState
-    ) rethrows -> MTLRenderPipelineState {
-        if let cached = materialCache[materialKey] {
-            return cached
+    ) -> MTLRenderPipelineState? {
+        if let cached = materialCache[materialKey] { return cached }
+        if failedKeys.contains(materialKey) { return nil }
+        do {
+            let pipeline = try compile()
+            materialCache[materialKey] = pipeline
+            return pipeline
+        } catch {
+            failedKeys.insert(materialKey)
+            print("[PipelineCache] ❌ Shader compilation failed for key hash \(materialKey.shaderSourceHash):")
+            print("  Error: \(error)")
+            return nil
         }
-        let pipeline = try compile()
-        materialCache[materialKey] = pipeline
-        return pipeline
     }
 
-    /// Invalidates a material-keyed pipeline.
+    /// Invalidates a material-keyed pipeline (also clears failure record so recompilation is attempted).
     public func invalidate(materialKey: PipelineCacheKey) {
         materialCache.removeValue(forKey: materialKey)
+        failedKeys.remove(materialKey)
     }
 
     // MARK: - Depth Stencil Cache
@@ -81,6 +91,7 @@ public final class PipelineCache {
     public func invalidateAll() {
         cache.removeAll()
         materialCache.removeAll()
+        failedKeys.removeAll()
         depthStencilCache.removeAll()
     }
 

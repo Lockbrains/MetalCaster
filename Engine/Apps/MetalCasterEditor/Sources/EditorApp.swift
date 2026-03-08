@@ -174,7 +174,7 @@ struct MetalCasterEditorApp: App {
             }
 
             CommandMenu("Tool") {
-                Button("Shader Canvas") {
+                Button("Shader Canvas Pro") {
                     editorState?.showShaderCanvas = true
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])

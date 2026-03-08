@@ -21,8 +21,10 @@ public struct ShaderSnippets {
         struct VertexIn {
             float3 positionOS [[attribute(0)]];
         """
-        if config.normalEnabled { header += "\n    float3 normalOS [[attribute(1)]];" }
-        if config.uvEnabled     { header += "\n    float2 uv [[attribute(2)]];" }
+        if config.normalEnabled    { header += "\n    float3 normalOS [[attribute(1)]];" }
+        if config.uvEnabled        { header += "\n    float2 uv [[attribute(2)]];" }
+        if config.tangentEnabled   { header += "\n    float3 tangentOS [[attribute(3)]];" }
+        if config.bitangentEnabled { header += "\n    float3 bitangentOS [[attribute(4)]];" }
         header += "\n};\n\nstruct VertexOut {\n    float4 position [[position]];"
         if config.normalEnabled         { header += "\n    float3 normalOS;" }
         if config.uvEnabled             { header += "\n    float2 uv;" }
@@ -30,6 +32,8 @@ public struct ShaderSnippets {
         if config.worldPositionEnabled  { header += "\n    float3 positionWS;" }
         if config.worldNormalEnabled    { header += "\n    float3 normalWS;" }
         if config.viewDirectionEnabled  { header += "\n    float3 viewDirWS;" }
+        if config.tangentEnabled        { header += "\n    float3 tangentOS;" }
+        if config.bitangentEnabled      { header += "\n    float3 bitangentOS;" }
         header += """
         
         };
@@ -40,7 +44,7 @@ public struct ShaderSnippets {
             float4x4 normalMatrix;
             float4   cameraPosition;
             float    time;
-            float    _pad0;
+            float    studioLightOn;
             float    _pad1;
             float    _pad2;
         };
@@ -56,9 +60,11 @@ public struct ShaderSnippets {
             VertexOut out;
             out.position = uniforms.mvpMatrix * float4(in.positionOS, 1.0);
         """
-        if config.normalEnabled { fn += "\n    out.normalOS = in.normalOS;" }
-        if config.uvEnabled     { fn += "\n    out.uv = in.uv;" }
-        if config.timeEnabled   { fn += "\n    out.time = uniforms.time;" }
+        if config.normalEnabled    { fn += "\n    out.normalOS = in.normalOS;" }
+        if config.uvEnabled        { fn += "\n    out.uv = in.uv;" }
+        if config.timeEnabled      { fn += "\n    out.time = uniforms.time;" }
+        if config.tangentEnabled   { fn += "\n    out.tangentOS = in.tangentOS;" }
+        if config.bitangentEnabled { fn += "\n    out.bitangentOS = in.bitangentOS;" }
         if config.worldPositionEnabled || config.viewDirectionEnabled {
             fn += "\n    float4 worldPos = uniforms.modelMatrix * float4(in.positionOS, 1.0);"
             fn += "\n    out.positionWS = worldPos.xyz;"
@@ -95,8 +101,10 @@ public struct ShaderSnippets {
                 out.normalOS = normalize(newNormal);
             """
         }
-        if config.uvEnabled     { fn += "\n    out.uv = in.uv;" }
-        if config.timeEnabled   { fn += "\n    out.time = uniforms.time;" }
+        if config.uvEnabled        { fn += "\n    out.uv = in.uv;" }
+        if config.timeEnabled      { fn += "\n    out.time = uniforms.time;" }
+        if config.tangentEnabled   { fn += "\n    out.tangentOS = in.tangentOS;" }
+        if config.bitangentEnabled { fn += "\n    out.bitangentOS = in.bitangentOS;" }
         if config.worldPositionEnabled || config.viewDirectionEnabled {
             fn += "\n    float4 worldPos = uniforms.modelMatrix * float4(pos, 1.0);"
             fn += "\n    out.positionWS = worldPos.xyz;"
@@ -120,9 +128,11 @@ public struct ShaderSnippets {
 
             out.position = uniforms.mvpMatrix * float4(pos, 1.0);
         """
-        if config.normalEnabled { fn += "\n    out.normalOS = in.normalOS;" }
-        if config.uvEnabled     { fn += "\n    out.uv = in.uv;" }
-        if config.timeEnabled   { fn += "\n    out.time = uniforms.time;" }
+        if config.normalEnabled    { fn += "\n    out.normalOS = in.normalOS;" }
+        if config.uvEnabled        { fn += "\n    out.uv = in.uv;" }
+        if config.timeEnabled      { fn += "\n    out.time = uniforms.time;" }
+        if config.tangentEnabled   { fn += "\n    out.tangentOS = in.tangentOS;" }
+        if config.bitangentEnabled { fn += "\n    out.bitangentOS = in.bitangentOS;" }
         if config.worldPositionEnabled || config.viewDirectionEnabled {
             fn += "\n    float4 worldPos = uniforms.modelMatrix * float4(pos, 1.0);"
             fn += "\n    out.positionWS = worldPos.xyz;"
@@ -139,8 +149,10 @@ public struct ShaderSnippets {
 
     public static func generateStructPreview(config: DataFlowConfig) -> String {
         var preview = "struct VertexIn {\n    float3 positionOS [[attribute(0)]];"
-        if config.normalEnabled { preview += "\n    float3 normalOS [[attribute(1)]];" }
-        if config.uvEnabled     { preview += "\n    float2 uv [[attribute(2)]];" }
+        if config.normalEnabled    { preview += "\n    float3 normalOS [[attribute(1)]];" }
+        if config.uvEnabled        { preview += "\n    float2 uv [[attribute(2)]];" }
+        if config.tangentEnabled   { preview += "\n    float3 tangentOS [[attribute(3)]];" }
+        if config.bitangentEnabled { preview += "\n    float3 bitangentOS [[attribute(4)]];" }
         preview += "\n};\n\nstruct VertexOut {\n    float4 position [[position]];"
         if config.normalEnabled         { preview += "\n    float3 normalOS;" }
         if config.uvEnabled             { preview += "\n    float2 uv;" }
@@ -148,6 +160,8 @@ public struct ShaderSnippets {
         if config.worldPositionEnabled  { preview += "\n    float3 positionWS;" }
         if config.worldNormalEnabled    { preview += "\n    float3 normalWS;" }
         if config.viewDirectionEnabled  { preview += "\n    float3 viewDirWS;" }
+        if config.tangentEnabled        { preview += "\n    float3 tangentOS;" }
+        if config.bitangentEnabled      { preview += "\n    float3 bitangentOS;" }
         preview += "\n};\n\nstruct Uniforms {\n    float4x4 mvpMatrix;"
         preview += "\n    float4x4 modelMatrix;"
         preview += "\n    float4x4 normalMatrix;"
@@ -725,45 +739,75 @@ public struct ShaderSnippets {
 
     // MARK: - Lit Material Template (PBR-friendly)
 
+    /// Studio lighting preamble injected only during Shader Canvas compilation.
+    public static let studioLightPreamble = """
+    struct StudioLight {
+        float3 direction;
+        float3 color;
+        float  intensity;
+    };
+
+    constant StudioLight studioLights[3] = {
+        { float3( 0.5657,  0.7071,  0.4243), float3(1.00, 0.96, 0.90), 2.5 },
+        { float3(-0.7682,  0.3841,  0.5121), float3(0.40, 0.45, 0.55), 1.0 },
+        { float3(-0.1761,  0.4402, -0.8805), float3(0.60, 0.60, 0.70), 1.2 },
+    };
+    constant int studioLightCount = 3;
+    """
+
     /// A PBR-inspired fragment shader for the Lit Material template.
     /// Uses world-space normals, view direction, and a simplified Cook-Torrance BRDF.
+    /// When `uniforms.studioLightOn > 0.5`, uses 3-point studio lighting; otherwise single key light.
     public static let litMaterialFragment = """
     // @param _baseColor color 0.8 0.3 0.2
     // @param _metallic float 0.0 0.0 1.0
     // @param _roughness float 0.5 0.04 1.0
-    // @param _ambientIntensity float 0.08 0.0 0.5
+    // @param _ambientIntensity float 0.12 0.0 0.5
     fragment float4 fragment_main(VertexOut in [[stage_in]],
+                                   constant Uniforms &uniforms [[buffer(1)]],
                                    constant float *params [[buffer(2)]]) {
         float3 N = normalize(in.normalWS);
         float3 V = normalize(in.viewDirWS);
-        float3 L = normalize(float3(0.5, 1.0, 0.8));
-        float3 H = normalize(L + V);
-
-        float NdotL = max(0.0, dot(N, L));
-        float NdotH = max(0.0, dot(N, H));
-        float NdotV = max(0.0, dot(N, V));
+        float NdotV = max(0.001, dot(N, V));
 
         float3 baseColor = _baseColor;
         float metallic = _metallic;
         float roughness = max(0.04, _roughness);
         float alpha = roughness * roughness;
+        float a2 = alpha * alpha;
 
         float3 F0 = mix(float3(0.04), baseColor, metallic);
-        float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - max(0.0, dot(H, V)), 5.0);
-
-        float a2 = alpha * alpha;
-        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-        float D = a2 / (3.14159265 * denom * denom);
-
         float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
 
-        float3 specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, 0.001);
-        float3 kD = (1.0 - fresnel) * (1.0 - metallic);
-        float3 diffuse = kD * baseColor / 3.14159265;
+        float3 totalColor = float3(0.0);
 
-        float3 color = (diffuse + specular) * NdotL + baseColor * _ambientIntensity;
-        return float4(color, 1.0);
+        int lightCount = (uniforms.studioLightOn > 0.5) ? studioLightCount : 1;
+        for (int i = 0; i < lightCount; i++) {
+            float3 L = studioLights[i].direction;
+            float3 H = normalize(L + V);
+
+            float NdotL = max(0.0, dot(N, L));
+            float NdotH = max(0.0, dot(N, H));
+            float HdotV = max(0.0, dot(H, V));
+
+            float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - HdotV, 5.0);
+
+            float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+            float D = a2 / (3.14159265 * denom * denom);
+
+            float Gv = NdotV / (NdotV * (1.0 - k) + k);
+            float Gl = NdotL / (NdotL * (1.0 - k) + k);
+            float G = Gv * Gl;
+
+            float3 specular = (D * G * fresnel) / max(4.0 * NdotV * NdotL, 0.001);
+            float3 kD = (1.0 - fresnel) * (1.0 - metallic);
+            float3 diffuse = kD * baseColor / 3.14159265;
+
+            totalColor += (diffuse + specular) * NdotL * studioLights[i].color * studioLights[i].intensity;
+        }
+
+        totalColor += baseColor * _ambientIntensity;
+        return float4(totalColor, 1.0);
     }
     """
 

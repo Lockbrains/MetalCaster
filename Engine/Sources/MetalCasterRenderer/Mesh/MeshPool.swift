@@ -10,8 +10,9 @@ public final class MeshPool {
     private let allocator: MTKMeshBufferAllocator
     private var cache: [String: MTKMesh] = [:]
     private var metadataCache: [String: MeshMetadata] = [:]
+    private var extendedCache: [String: MTKMesh] = [:]
 
-    /// The standard vertex descriptor used by all meshes in the engine.
+    /// The standard vertex descriptor used by the main editor renderer.
     /// Layout: position(float3) + normal(float3) + texCoord(float2), stride = 32
     public static let standardVertexDescriptor: MDLVertexDescriptor = {
         let desc = MDLVertexDescriptor()
@@ -31,9 +32,39 @@ public final class MeshPool {
         return desc
     }()
 
+    /// Extended vertex descriptor with tangent space data for Shader Canvas.
+    /// Layout: position(float3) + normal(float3) + texCoord(float2) + tangent(float3) + bitangent(float3)
+    /// stride = 56 bytes
+    public static let extendedVertexDescriptor: MDLVertexDescriptor = {
+        let s = MemoryLayout<Float>.stride
+        let desc = MDLVertexDescriptor()
+        desc.attributes[0] = MDLVertexAttribute(
+            name: MDLVertexAttributePosition, format: .float3, offset: 0, bufferIndex: 0
+        )
+        desc.attributes[1] = MDLVertexAttribute(
+            name: MDLVertexAttributeNormal, format: .float3, offset: s * 3, bufferIndex: 0
+        )
+        desc.attributes[2] = MDLVertexAttribute(
+            name: MDLVertexAttributeTextureCoordinate, format: .float2, offset: s * 6, bufferIndex: 0
+        )
+        desc.attributes[3] = MDLVertexAttribute(
+            name: MDLVertexAttributeTangent, format: .float3, offset: s * 8, bufferIndex: 0
+        )
+        desc.attributes[4] = MDLVertexAttribute(
+            name: MDLVertexAttributeBitangent, format: .float3, offset: s * 11, bufferIndex: 0
+        )
+        desc.layouts[0] = MDLVertexBufferLayout(stride: s * 14)
+        return desc
+    }()
+
     /// Converts the standard vertex descriptor to a Metal vertex descriptor.
     public static var metalVertexDescriptor: MTLVertexDescriptor? {
         MTKMetalVertexDescriptorFromModelIO(standardVertexDescriptor)
+    }
+
+    /// Converts the extended vertex descriptor to a Metal vertex descriptor.
+    public static var extendedMetalVertexDescriptor: MTLVertexDescriptor? {
+        MTKMetalVertexDescriptorFromModelIO(extendedVertexDescriptor)
     }
 
     public init(device: MTLDevice) {
@@ -41,17 +72,22 @@ public final class MeshPool {
         self.allocator = MTKMeshBufferAllocator(device: device)
     }
 
-    /// Gets or creates a mesh for the given type.
+    /// Gets or creates a mesh for the given type (standard layout).
     public func mesh(for type: MeshType) -> MTKMesh? {
         let key = cacheKey(for: type)
-        if let cached = cache[key] {
-            return cached
-        }
-        let mesh = loadMesh(type: type)
-        if let mesh = mesh {
-            cache[key] = mesh
-            metadataCache[key] = MeshMetadata.extract(from: mesh)
-        }
+        if let cached = cache[key] { return cached }
+        let mesh = loadMesh(type: type, extended: false)
+        if let mesh { cache[key] = mesh; metadataCache[key] = MeshMetadata.extract(from: mesh) }
+        return mesh
+    }
+
+    /// Gets or creates a mesh with the extended layout (includes tangent/bitangent).
+    /// Used by the Shader Canvas for TBN-space workflows.
+    public func meshExtended(for type: MeshType) -> MTKMesh? {
+        let key = cacheKey(for: type)
+        if let cached = extendedCache[key] { return cached }
+        let mesh = loadMesh(type: type, extended: true)
+        if let mesh { extendedCache[key] = mesh }
         return mesh
     }
 
@@ -65,18 +101,20 @@ public final class MeshPool {
         let key = cacheKey(for: type)
         cache.removeValue(forKey: key)
         metadataCache.removeValue(forKey: key)
+        extendedCache.removeValue(forKey: key)
     }
 
     /// Invalidates all cached meshes.
     public func invalidateAll() {
         cache.removeAll()
         metadataCache.removeAll()
+        extendedCache.removeAll()
     }
 
     // MARK: - Private
 
-    private func loadMesh(type: MeshType) -> MTKMesh? {
-        let vertexDescriptor = Self.standardVertexDescriptor
+    private func loadMesh(type: MeshType, extended: Bool) -> MTKMesh? {
+        let vertexDescriptor = extended ? Self.extendedVertexDescriptor : Self.standardVertexDescriptor
         var mdlMesh: MDLMesh?
 
         switch type {
@@ -124,9 +162,9 @@ public final class MeshPool {
             )
         case .capsule:
             mdlMesh = MDLMesh(
-                capsuleWithExtent: [2, 3, 2],
-                cylinderSegments: [60, 1],
-                hemisphereSegments: 30,
+                capsuleWithExtent: [1.5, 3, 1.5],
+                cylinderSegments: [60, 12],
+                hemisphereSegments: 20,
                 inwardNormals: false,
                 geometryType: .triangles,
                 allocator: allocator
@@ -147,6 +185,15 @@ public final class MeshPool {
         }
 
         guard let mdl = mdlMesh else { return nil }
+
+        if extended {
+            mdl.addTangentBasis(
+                forTextureCoordinateAttributeNamed: MDLVertexAttributeTextureCoordinate,
+                tangentAttributeNamed: MDLVertexAttributeTangent,
+                bitangentAttributeNamed: MDLVertexAttributeBitangent
+            )
+        }
+
         mdl.vertexDescriptor = vertexDescriptor
         return try? MTKMesh(mesh: mdl, device: device)
     }

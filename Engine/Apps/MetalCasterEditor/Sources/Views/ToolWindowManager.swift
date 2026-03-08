@@ -4,7 +4,7 @@ import AppKit
 import MetalCasterRenderer
 
 enum ToolWindowKind: String {
-    case shaderCanvas = "Shader Canvas"
+    case shaderCanvas = "Shader Canvas Pro"
     case sdfCanvas = "SDF Canvas"
     case profiler = "Profiler"
     case frameDebugger = "Frame Debugger"
@@ -96,6 +96,18 @@ enum ToolWindowManager {
         }
 
         let canvasView = ShaderCanvasView(template: template)
+            .environment(state)
+        openWindow(kind: .shaderCanvas, content: AnyView(canvasView))
+    }
+
+    /// Opens Shader Canvas Pro with an existing material for editing.
+    static func openShaderCanvas(material: MCMaterial, fileURL: URL, state: EditorState) {
+        if let existing = windows[.shaderCanvas], existing.isVisible {
+            existing.close()
+            windows[.shaderCanvas] = nil
+        }
+
+        let canvasView = ShaderCanvasView(material: material, fileURL: fileURL)
             .environment(state)
         openWindow(kind: .shaderCanvas, content: AnyView(canvasView))
     }

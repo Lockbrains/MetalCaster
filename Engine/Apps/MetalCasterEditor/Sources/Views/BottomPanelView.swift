@@ -1,6 +1,7 @@
 import SwiftUI
 import MetalCasterCore
 import MetalCasterAsset
+import MetalCasterRenderer
 import UniformTypeIdentifiers
 #if canImport(AppKit)
 import AppKit
@@ -772,8 +773,21 @@ struct AssetListRow: View {
                     state.requestLoadScene(from: url)
                 }
             case .materials:
-                if let url = state.assetDatabase.resolveURL(for: entry.guid) {
-                    state.assignMaterialAsset(from: url)
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   entry.fileExtension.lowercased() == "mcmat" {
+                    do {
+                        let material = try MCMaterial.load(from: url)
+                        if material.unifiedShaderSource != nil
+                            || material.vertexShaderSource != nil
+                            || !material.fragmentShaderSource.isEmpty {
+                            ToolWindowManager.openShaderCanvas(
+                                material: material, fileURL: url, state: state)
+                        } else {
+                            state.assignMaterialAsset(from: url)
+                        }
+                    } catch {
+                        state.assignMaterialAsset(from: url)
+                    }
                 }
             case .gameplay:
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {

@@ -193,6 +193,7 @@ struct ShaderCanvasEditorView: View {
 
     private func resetShader() {
         switch shader.category {
+        case .helper:     shader.code = "// Define reusable MSL functions here.\n\n"
         case .vertex:     shader.code = ShaderSnippets.generateVertexTemplate(config: dataFlowConfig)
         case .fragment:   shader.code = ShaderSnippets.fragmentTemplate
         case .fullscreen: shader.code = ShaderSnippets.fullscreenTemplate

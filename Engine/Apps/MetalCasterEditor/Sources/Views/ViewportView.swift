@@ -18,25 +18,55 @@ struct SceneEditorView: View {
         ZStack(alignment: .topLeading) {
             ZStack(alignment: .topTrailing) {
                 EditorMetalView(viewportID: 0, state: state)
-                statsOverlay
+                ThrottledStatsOverlay(showLights: true)
+                    .padding(8)
             }
             SceneOverlayPanel()
         }
         .background(Color.black)
     }
+}
 
-    private var statsOverlay: some View {
+private struct ThrottledStatsOverlay: View {
+    @Environment(EditorState.self) private var state
+    var showLights: Bool = false
+
+    @State private var fps: Int = 0
+    @State private var entityCount: Int = 0
+    @State private var drawCallCount: Int = 0
+    @State private var lightCount: Int = 0
+
+    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Entities: \(state.engine.world.entityCount)")
-            Text("Draw Calls: \(state.meshRenderSystem.drawCalls.count)")
-            Text("Lights: \(state.lightingSystem.lights.count)")
+            Text("\(fps) FPS")
+                .foregroundStyle(fps >= 50 ? .green : fps >= 30 ? .yellow : .red)
+            Text("Entities: \(entityCount)")
+            Text("Draw Calls: \(drawCallCount)")
+            if showLights {
+                Text("Lights: \(lightCount)")
+            }
         }
         .font(MCTheme.fontSmall)
         .foregroundStyle(MCTheme.textSecondary)
         .padding(8)
         .background(MCTheme.inputBackground)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .padding(8)
+        .onReceive(timer) { _ in
+            fps = state.viewportFPS
+            entityCount = state.engine.world.entityCount
+            drawCallCount = state.meshRenderSystem.drawCalls.count
+            if showLights {
+                lightCount = state.lightingSystem.lights.count
+            }
+        }
+        .onAppear {
+            fps = state.viewportFPS
+            entityCount = state.engine.world.entityCount
+            drawCallCount = state.meshRenderSystem.drawCalls.count
+            lightCount = state.lightingSystem.lights.count
+        }
     }
 }
 
@@ -65,24 +95,12 @@ struct GameViewportView: View {
                 HStack {
                     renderTargetSelector
                     Spacer()
-                    statsOverlay
+                    ThrottledStatsOverlay(showLights: false)
                 }
                 Spacer()
             }
             .padding(8)
         }
-    }
-
-    private var statsOverlay: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Entities: \(state.engine.world.entityCount)")
-            Text("Draw Calls: \(state.meshRenderSystem.drawCalls.count)")
-        }
-        .font(MCTheme.fontSmall)
-        .foregroundStyle(MCTheme.textSecondary)
-        .padding(8)
-        .background(MCTheme.inputBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var renderTargetSelector: some View {
@@ -156,6 +174,7 @@ struct EditorMetalView: NSViewRepresentable {
         mtkView.clearColor = MTLClearColor(red: 0.05, green: 0.05, blue: 0.07, alpha: 1)
         mtkView.depthStencilPixelFormat = .depth32Float
         mtkView.colorPixelFormat = .bgra8Unorm_srgb
+        mtkView.preferredFramesPerSecond = 60
         mtkView.delegate = context.coordinator
         context.coordinator.setup(device: mtkView.device!)
         context.coordinator.viewportView = mtkView
@@ -314,6 +333,15 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     var lastMouseLocation: NSPoint?
     var mouseDownPoint: NSPoint?
     var didDrag: Bool = false
+    var needsIDSync: Bool = false
+    var lastSyncCommandBuffer: MTLCommandBuffer?
+
+    /// Cached shader parameter parse results, keyed by shader source hash.
+    var shaderParamCache: [Int: (params: [ShaderParameter], packed: [Float])] = [:]
+
+    /// FPS tracking.
+    private var frameTimestamps: [CFAbsoluteTime] = []
+    private(set) var currentFPS: Int = 0
 
     // Cached matrices (updated each draw, used for gizmo hit-testing)
     var cachedViewMatrix: simd_float4x4 = .init(1)
@@ -485,6 +513,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
         mouseDownPoint = event.locationInWindow
         didDrag = false
         activeGizmoAxis = nil
+        needsIDSync = true
 
         if state.selectedEntity != nil {
             if let view = viewportView {
@@ -721,6 +750,11 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             return
         }
 
+        if let syncBuf = lastSyncCommandBuffer {
+            syncBuf.waitUntilCompleted()
+            lastSyncCommandBuffer = nil
+        }
+
         let scaleX = CGFloat(idTex.width) / viewSize.width
         let scaleY = CGFloat(idTex.height) / viewSize.height
         let px = Int(point.x * scaleX)
@@ -926,7 +960,13 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        let now = CFAbsoluteTimeGetCurrent()
+        frameTimestamps.append(now)
+        frameTimestamps.removeAll { now - $0 > 1.0 }
+        currentFPS = frameTimestamps.count
+
         if viewportID == 0 {
+            state.viewportFPS = currentFPS
             state.tick(deltaTime: 1.0 / 60.0)
         }
 
@@ -1045,7 +1085,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         guard let pipeline = activePipeline else { return }
 
-        // Object ID pass (Scene Editor only — for GPU picking and post-process outline)
+        // Object ID pass (Scene Editor only)
         if viewportID == 0, let idPSO = objectIDPipeline, let dev = metalDevice?.device {
             let w = Int(view.drawableSize.width)
             let h = Int(view.drawableSize.height)
@@ -1067,36 +1107,61 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     enc.setDepthStencilState(device.depthStencilState)
                     enc.setRenderPipelineState(idPSO)
 
-                    for drawCall in state.meshRenderSystem.drawCalls {
-                        let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
-                        var uniforms = Uniforms(
-                            mvpMatrix: mvp,
-                            modelMatrix: drawCall.worldMatrix,
-                            normalMatrix: drawCall.normalMatrix,
-                            cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
-                            time: state.engine.totalTime
-                        )
-                        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-                        var entityID = UInt32(truncatingIfNeeded: drawCall.entity.id &+ 1)
-                        enc.setFragmentBytes(&entityID, length: MemoryLayout<UInt32>.stride, index: 6)
-                        enc.setCullMode(drawCall.material.renderState.cullMode.metalCullMode)
-
-                        if let mesh = pool.mesh(for: drawCall.meshType) {
-                            MeshRenderer.draw(mesh: mesh, with: enc)
+                    if needsIDSync {
+                        // Full pass: render ALL entities for GPU picking readback
+                        for drawCall in state.meshRenderSystem.drawCalls {
+                            let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
+                            var uniforms = Uniforms(
+                                mvpMatrix: mvp,
+                                modelMatrix: drawCall.worldMatrix,
+                                normalMatrix: drawCall.normalMatrix,
+                                cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
+                                time: state.engine.totalTime
+                            )
+                            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                            var entityID = UInt32(truncatingIfNeeded: drawCall.entity.id &+ 1)
+                            enc.setFragmentBytes(&entityID, length: MemoryLayout<UInt32>.stride, index: 6)
+                            enc.setCullMode(drawCall.material.renderState.cullMode.metalCullMode)
+                            if let mesh = pool.mesh(for: drawCall.meshType) {
+                                MeshRenderer.draw(mesh: mesh, with: enc)
+                            }
+                        }
+                    } else if let selected = state.selectedEntity {
+                        // Lightweight pass: only render the selected entity for outline
+                        if let drawCall = state.meshRenderSystem.drawCalls.first(where: { $0.entity.id == selected.id }) {
+                            let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
+                            var uniforms = Uniforms(
+                                mvpMatrix: mvp,
+                                modelMatrix: drawCall.worldMatrix,
+                                normalMatrix: drawCall.normalMatrix,
+                                cameraPosition: SIMD4<Float>(eye.x, eye.y, eye.z, 0),
+                                time: state.engine.totalTime
+                            )
+                            enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                            var entityID = UInt32(truncatingIfNeeded: drawCall.entity.id &+ 1)
+                            enc.setFragmentBytes(&entityID, length: MemoryLayout<UInt32>.stride, index: 6)
+                            enc.setCullMode(drawCall.material.renderState.cullMode.metalCullMode)
+                            if let mesh = pool.mesh(for: drawCall.meshType) {
+                                MeshRenderer.draw(mesh: mesh, with: enc)
+                            }
                         }
                     }
                     enc.endEncoding()
                 }
 
-                if let blit = commandBuffer.makeBlitCommandEncoder() {
-                    blit.synchronize(resource: idTex)
-                    blit.endEncoding()
+                if needsIDSync {
+                    if let blit = commandBuffer.makeBlitCommandEncoder() {
+                        blit.synchronize(resource: idTex)
+                        blit.endEncoding()
+                    }
+                    lastSyncCommandBuffer = commandBuffer
+                    needsIDSync = false
                 }
             }
         }
 
         // Build the render pass descriptor
-        let rpd: MTLRenderPassDescriptor
+        var rpd: MTLRenderPassDescriptor!
         if usePostProcess, let ppStack = postProcessStack {
             let w = Int(view.drawableSize.width)
             let h = Int(view.drawableSize.height)
@@ -1120,7 +1185,6 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 gridRenderer?.draw(encoder: encoder, viewProjectionMatrix: vpMatrix)
             }
 
-            // Skybox pass (before opaque geometry)
             drawSkybox(encoder: encoder, device: device, pool: pool,
                        viewMatrix: viewMatrix, projMatrix: projMatrix,
                        useHDR: usePostProcess)
@@ -1138,7 +1202,8 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             var lightsData = state.lightingSystem.lights
             var lightCount = state.lightingSystem.lightCount
 
-            for drawCall in state.meshRenderSystem.drawCalls {
+            let drawCallList = state.meshRenderSystem.drawCalls
+            for drawCall in drawCallList {
                 let mvp = projMatrix * viewMatrix * drawCall.worldMatrix
                 var uniforms = Uniforms(
                     mvpMatrix: mvp,
@@ -1149,9 +1214,15 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                 )
                 encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
 
+                if drawCall.material.unifiedShaderSource != nil {
+                    encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+                }
+
+                var customPSOActive = false
                 if usePerMaterial {
                     if let materialPSO = resolveMaterialPipeline(for: drawCall.material, device: device, useHDR: usePostProcess) {
                         encoder.setRenderPipelineState(materialPSO)
+                        customPSOActive = true
 
                         let rs = drawCall.material.renderState
                         encoder.setCullMode(rs.cullMode.metalCullMode)
@@ -1164,11 +1235,9 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                         encoder.setDepthStencilState(device.depthStencilState)
                     }
 
-                    // Bind PBR material properties at fragment buffer 2
                     var gpuMat = GPUMaterialProperties(from: drawCall.material.surfaceProperties)
                     encoder.setFragmentBytes(&gpuMat, length: MemoryLayout<GPUMaterialProperties>.stride, index: 2)
 
-                    // Bind textures (or 1x1 white placeholder)
                     let placeholder = MaterialRegistry.shared.placeholderWhiteTexture
                     let registry = MaterialRegistry.shared
                     let props = drawCall.material.surfaceProperties
@@ -1203,10 +1272,16 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                                                  index: 4)
                     }
 
-                    // Bind custom shader parameters at buffer 5
                     let shaderSource = drawCall.material.unifiedShaderSource ?? drawCall.material.fragmentShaderSource
                     if !shaderSource.isEmpty {
-                        let shaderParams = ShaderParameterParser.parse(source: shaderSource)
+                        let sourceHash = shaderSource.hashValue
+                        let shaderParams: [ShaderParameter]
+                        if let cached = shaderParamCache[sourceHash] {
+                            shaderParams = cached.params
+                        } else {
+                            shaderParams = ShaderParameterParser.parse(source: shaderSource)
+                            shaderParamCache[sourceHash] = (shaderParams, [])
+                        }
                         if !shaderParams.isEmpty {
                             var packed = ShaderParameterParser.packParameters(
                                 params: shaderParams,
@@ -1221,7 +1296,14 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     }
                 }
 
-                if let mesh = pool.mesh(for: drawCall.meshType) {
+                let useExtendedMesh = customPSOActive
+                    && drawCall.material.unifiedShaderSource != nil
+                    && (drawCall.material.dataFlowConfig.tangentEnabled
+                        || drawCall.material.dataFlowConfig.bitangentEnabled)
+                let mesh = useExtendedMesh
+                    ? pool.meshExtended(for: drawCall.meshType)
+                    : pool.mesh(for: drawCall.meshType)
+                if let mesh {
                     MeshRenderer.draw(mesh: mesh, with: encoder)
                 }
             }
@@ -1549,6 +1631,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
+
     }
 
     // MARK: - Per-Material Pipeline Resolution
@@ -1577,15 +1660,28 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
 
         let cacheKey = material.pipelineCacheKey.withHDR(useHDR)
 
+
         if let unified = material.unifiedShaderSource {
-            return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
-                try shaderCompiler!.compileUnifiedPipeline(
-                    source: unified,
-                    renderState: material.renderState,
-                    colorFormat: colorFormat,
-                    depthFormat: .depth32Float,
-                    vertexDescriptor: MeshPool.metalVertexDescriptor
-                )
+            let needsExtended = material.dataFlowConfig.tangentEnabled
+                || material.dataFlowConfig.bitangentEnabled
+            let vtxDesc = needsExtended
+                ? MeshPool.extendedMetalVertexDescriptor
+                : MeshPool.metalVertexDescriptor
+            return materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
+                do {
+                    return try shaderCompiler!.compileUnifiedPipeline(
+                        source: unified,
+                        renderState: material.renderState,
+                        colorFormat: colorFormat,
+                        depthFormat: .depth32Float,
+                        vertexDescriptor: vtxDesc
+                    )
+                } catch {
+                    print("[UnifiedShader] ❌ Compilation failed for material '\(material.name)'")
+                    print("[UnifiedShader] Source (\(unified.count) chars):")
+                    print(unified)
+                    throw error
+                }
             }
         }
 
@@ -1597,7 +1693,7 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             ?? ShaderSnippets.generateDefaultVertexShader(config: config))
         let fragmentSource = header + material.fragmentShaderSource
 
-        return try? materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
+        return materialPipelineCache?.getOrCompile(materialKey: cacheKey) {
             try shaderCompiler!.compilePipeline(
                 vertexSource: vertexSource,
                 fragmentSource: fragmentSource,
