@@ -5,7 +5,7 @@ import MetalCasterRenderer
 
 enum ToolWindowKind: String {
     case shaderCanvas = "Shader Canvas Pro"
-    case sdfCanvas = "SDF Canvas"
+    case sdfCanvas = "SDF Canvas Pro"
     case profiler = "Profiler"
     case frameDebugger = "Frame Debugger"
 
@@ -39,7 +39,7 @@ enum ToolWindowManager {
         let content: AnyView
         switch kind {
         case .shaderCanvas:  return
-        case .sdfCanvas:     content = AnyView(SDFCanvasToolView().environment(state))
+        case .sdfCanvas:     content = AnyView(SDFCanvasProView().environment(state))
         case .profiler:      content = AnyView(ProfilerView().environment(state))
         case .frameDebugger: content = AnyView(FrameDebuggerView().environment(state))
         }
@@ -127,7 +127,8 @@ enum ToolWindowManager {
         window.titlebarAppearsTransparent = true
         window.backgroundColor = .black
         window.isOpaque = true
-        window.isMovableByWindowBackground = true
+        // SDF canvas uses in-canvas drag/drop heavily; avoid stealing drags as window moves.
+        window.isMovableByWindowBackground = (kind != .sdfCanvas)
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.isReleasedWhenClosed = false
@@ -144,49 +145,6 @@ enum ToolWindowManager {
             case .frameDebugger: state.showFrameDebugger = false
             }
         }
-    }
-}
-
-// MARK: - SDF Canvas Tool
-
-struct SDFCanvasToolView: View {
-    @Environment(EditorState.self) private var state
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "cube.transparent")
-                    .font(.system(size: 14))
-                    .foregroundStyle(MCTheme.statusOrange)
-                Text("SDF Canvas")
-                    .font(MCTheme.fontTitle)
-                    .foregroundStyle(MCTheme.textPrimary)
-                Spacer()
-                Text("Signed distance field modeling")
-                    .font(MCTheme.fontCaption)
-                    .foregroundStyle(MCTheme.textTertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(Color.white.opacity(0.04))
-
-            Divider().background(MCTheme.panelBorder)
-
-            ZStack {
-                MCTheme.background
-                VStack(spacing: 16) {
-                    Image(systemName: "cube.transparent.fill")
-                        .font(.system(size: 48, weight: .thin))
-                        .foregroundStyle(MCTheme.textTertiary)
-                    Text("SDF Canvas enables real-time SDF modeling\nwith marching cubes mesh export to USD.")
-                        .font(MCTheme.fontCaption)
-                        .foregroundStyle(MCTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
-        }
-        .background(MCTheme.background)
-        .preferredColorScheme(.dark)
     }
 }
 #endif

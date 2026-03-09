@@ -1351,11 +1351,23 @@ public final class EditorState {
         }
     }
 
-    /// Saves the currently editing material asset back to disk.
+    /// Saves the currently editing material asset back to disk
+    /// and propagates parameter changes to any entities using this material.
     public func saveEditingMaterialAsset() {
         guard let mat = editingMaterialAsset, let url = editingMaterialAssetURL else { return }
         do {
             try mat.save(to: url)
+            let entities = engine.world.entitiesWith(MaterialComponent.self)
+            for entity in entities {
+                guard let mc = engine.world.getComponent(MaterialComponent.self, from: entity) else { continue }
+                if mc.material.name == mat.name {
+                    var updated = mc.material
+                    updated.parameters = mat.parameters
+                    updated.surfaceProperties = mat.surfaceProperties
+                    engine.world.addComponent(MaterialComponent(material: updated), to: entity)
+                }
+            }
+            worldRevision += 1
         } catch {
             print("[MetalCaster] Failed to save material asset: \(error)")
         }

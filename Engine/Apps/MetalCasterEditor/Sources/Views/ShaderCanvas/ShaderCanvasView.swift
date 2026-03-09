@@ -18,6 +18,7 @@ struct ShaderCanvasView: View {
     @State private var meshType: MeshType = .sphere
     @State private var dataFlowConfig: DataFlowConfig
     @State private var paramValues: [String: [Float]] = [:]
+    @State private var lastCodeDefaults: [String: [Float]] = [:]
     @State private var textureSlots: [TextureSlot] = []
     @State private var sourceImagePath: String?
     @State private var canvasName: String = "Untitled Canvas"
@@ -98,7 +99,7 @@ struct ShaderCanvasView: View {
         .frame(minWidth: 900, minHeight: 600)
         .background(MCTheme.background)
         .preferredColorScheme(.dark)
-        .onChange(of: activeShaders) { _ in syncToCanvasState() }
+        .onChange(of: activeShaders) { _ in syncParamValuesFromCode(); syncToCanvasState() }
         .onChange(of: dataFlowConfig) { _ in syncToCanvasState() }
         .onChange(of: paramValues) { _ in syncToCanvasState() }
         .onChange(of: meshType) { _ in syncToCanvasState() }
@@ -538,6 +539,37 @@ struct ShaderCanvasView: View {
     }
 
     // MARK: - State Sync
+
+    /// Re-parses `// @param` annotations from shader code and syncs `paramValues`.
+    /// - New params: initialized to their code default.
+    /// - Code default edited: sidebar value updated to the new default.
+    /// - Sidebar-only change (code default unchanged): preserved.
+    /// - Removed params: cleaned up.
+    private func syncParamValuesFromCode() {
+        var codeDefaults: [String: [Float]] = [:]
+        for shader in activeShaders where shader.category == .fragment || shader.category == .vertex {
+            for param in ShaderSnippets.parseParams(from: shader.code) {
+                codeDefaults[param.name] = param.defaultValue
+            }
+        }
+
+        var updated: [String: [Float]] = [:]
+        for (name, newDef) in codeDefaults {
+            let oldDef = lastCodeDefaults[name]
+            if oldDef == nil {
+                updated[name] = paramValues[name] ?? newDef
+            } else if oldDef != newDef {
+                updated[name] = newDef
+            } else {
+                updated[name] = paramValues[name] ?? newDef
+            }
+        }
+
+        if updated != paramValues {
+            paramValues = updated
+        }
+        lastCodeDefaults = codeDefaults
+    }
 
     private func syncToCanvasState() {
         canvasState.activeShaders = activeShaders.filter { $0.category != .helper }

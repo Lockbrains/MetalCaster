@@ -402,7 +402,8 @@ public struct ShaderParameterParser {
             guard tokens.count >= 2 else { continue }
 
             let name = tokens[0]
-            guard let type = ShaderParameter.ParamType(rawValue: tokens[1]) else { continue }
+            let typeToken = tokens[1] == "color" ? "color3" : tokens[1]
+            guard let type = ShaderParameter.ParamType(rawValue: typeToken) else { continue }
 
             let componentCount = type.componentCount
             var defaultValue = [Float](repeating: 0, count: componentCount)

@@ -56,30 +56,38 @@ struct MetalCasterEditorApp: App {
 
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {
-                    editorState?.undoLast()
+                    routeToSDFCanvas(notification: .sdfCanvasUndo) {
+                        editorState?.undoLast()
+                    }
                 }
                 .keyboardShortcut("z")
-                .disabled(editorState?.undoStack.isEmpty ?? true)
+                .disabled(editorState == nil)
 
                 Button("Redo") {
-                    editorState?.redoLast()
+                    routeToSDFCanvas(notification: .sdfCanvasRedo) {
+                        editorState?.redoLast()
+                    }
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(editorState?.redoStack.isEmpty ?? true)
+                .disabled(editorState == nil)
             }
 
             CommandGroup(replacing: .pasteboard) {
                 Button("Copy") {
-                    editorState?.copySelectedEntity()
+                    routeToSDFCanvas(notification: .sdfCanvasCopy) {
+                        editorState?.copySelectedEntity()
+                    }
                 }
                 .keyboardShortcut("c")
-                .disabled(editorState?.selectedEntity == nil)
+                .disabled(editorState == nil)
 
                 Button("Paste") {
-                    editorState?.pasteEntity()
+                    routeToSDFCanvas(notification: .sdfCanvasPaste) {
+                        editorState?.pasteEntity()
+                    }
                 }
                 .keyboardShortcut("v")
-                .disabled(editorState?.entityClipboard == nil)
+                .disabled(editorState == nil)
 
                 Divider()
 
@@ -180,10 +188,39 @@ struct MetalCasterEditorApp: App {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
                 .disabled(editorState == nil)
 
-                Button("SDF Canvas") {
+                Button("SDF Canvas Pro") {
                     editorState?.showSDFCanvas = true
                 }
                 .disabled(editorState == nil)
+
+                Divider()
+
+                Section("SDF Canvas Pro") {
+                    Button("New Canvas") {
+                        NotificationCenter.default.post(name: .sdfCanvasNew, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Open Canvas...") {
+                        NotificationCenter.default.post(name: .sdfCanvasOpen, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Save Canvas") {
+                        NotificationCenter.default.post(name: .sdfCanvasSave, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Save Canvas As...") {
+                        NotificationCenter.default.post(name: .sdfCanvasSaveAs, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Export SDF Mesh...") {
+                        NotificationCenter.default.post(name: .sdfCanvasExport, object: nil)
+                    }
+                    .disabled(editorState == nil)
+                }
 
                 Divider()
 
@@ -224,6 +261,22 @@ struct MetalCasterEditorApp: App {
 
         let name = url.deletingPathExtension().lastPathComponent
         RecentProjectsStore.add(name: name, url: url)
+    }
+
+    private func routeToSDFCanvas(notification: NSNotification.Name, fallback: () -> Void) {
+        if isSDFCanvasWindowFocused {
+            NotificationCenter.default.post(name: notification, object: nil)
+        } else {
+            fallback()
+        }
+    }
+
+    private var isSDFCanvasWindowFocused: Bool {
+        #if os(macOS)
+        NSApp.keyWindow?.title == ToolWindowKind.sdfCanvas.rawValue
+        #else
+        false
+        #endif
     }
 
     private func closeProject() {
