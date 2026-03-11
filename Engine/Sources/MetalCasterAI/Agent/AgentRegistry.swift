@@ -33,6 +33,7 @@ public final class AgentRegistry {
         register(AgentDefinitions.analyzeAgent())
         register(AgentDefinitions.artAgent())
         register(AgentDefinitions.audioAgent())
+        register(AgentDefinitions.composerAgent())
     }
 
     /// Resets all agents' conversation history.

@@ -12,6 +12,10 @@ public final class MeshPool {
     private var metadataCache: [String: MeshMetadata] = [:]
     private var extendedCache: [String: MTKMesh] = [:]
 
+    /// Closure that resolves a mesh asset UUID to its file URL.
+    /// Set by the editor to provide AssetDatabase resolution.
+    public var assetResolver: ((UUID) -> URL?)?
+
     /// The standard vertex descriptor used by the main editor renderer.
     /// Layout: position(float3) + normal(float3) + texCoord(float2), stride = 32
     public static let standardVertexDescriptor: MDLVertexDescriptor = {
@@ -180,8 +184,21 @@ public final class MeshPool {
             } else {
                 return mesh(for: .sphere)
             }
-        case .asset:
-            return mesh(for: .sphere)
+        case .asset(let guid):
+            if let resolver = assetResolver, let url = resolver(guid) {
+                let asset = MDLAsset(
+                    url: url,
+                    vertexDescriptor: vertexDescriptor,
+                    bufferAllocator: allocator
+                )
+                if let first = asset.childObjects(of: MDLMesh.self).first as? MDLMesh {
+                    mdlMesh = first
+                } else {
+                    return mesh(for: .sphere)
+                }
+            } else {
+                return mesh(for: .sphere)
+            }
         }
 
         guard let mdl = mdlMesh else { return nil }

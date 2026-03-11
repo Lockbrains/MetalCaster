@@ -10,6 +10,7 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
     case analyze  = "Analyze"
     case art      = "Art"
     case audio    = "Audio"
+    case composer = "Composer"
 
     public var id: String { rawValue }
 
@@ -23,6 +24,7 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .analyze:  return "Analyze"
         case .art:      return "Art"
         case .audio:    return "Audio"
+        case .composer: return "Composer"
         }
     }
 
@@ -36,6 +38,7 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .analyze:  return "waveform.path.ecg"
         case .art:      return "paintpalette"
         case .audio:    return "speaker.wave.3"
+        case .composer: return "mountain.2"
         }
     }
 
@@ -49,6 +52,7 @@ public enum AgentRole: String, CaseIterable, Codable, Sendable, Identifiable {
         case .analyze:  return "Scene diagnostics, error detection"
         case .art:      return "Visual style, color palettes, composition"
         case .audio:    return "Spatial audio, buses, sound design"
+        case .composer: return "Terrain generation, scene composition, AI-driven world building"
         }
     }
 }

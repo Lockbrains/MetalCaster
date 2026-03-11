@@ -619,10 +619,18 @@ private struct EntityRowDropDelegate: DropDelegate {
                     state.reparentEntity(dragged, to: targetEntity)
                 }
             } else if let guid = UUID(uuidString: string),
-                      let url = state.assetDatabase.resolveURL(for: guid),
-                      url.pathExtension == "mcmat" {
-                DispatchQueue.main.async {
-                    state.assignMaterialAsset(from: url, to: targetEntity)
+                      let url = state.assetDatabase.resolveURL(for: guid) {
+                let ext = url.pathExtension.lowercased()
+                if ext == "mcmat" {
+                    DispatchQueue.main.async {
+                        state.assignMaterialAsset(from: url, to: targetEntity)
+                    }
+                } else if AssetCategory.meshExtensions.contains(ext) {
+                    let name = url.deletingPathExtension().lastPathComponent
+                    DispatchQueue.main.async {
+                        let entity = state.addMeshAssetToScene(guid: guid, name: name, parent: targetEntity)
+                        state.selectedEntity = entity
+                    }
                 }
             }
         }
@@ -668,7 +676,7 @@ private struct CollectionDropDelegate: DropDelegate {
     }
 }
 
-/// Drop on the scroll view background = unparent / remove from collection.
+/// Drop on the scroll view background = unparent / remove from collection, or create mesh entity at root.
 private struct HierarchyBackgroundDropDelegate: DropDelegate {
     let state: EditorState
     @Binding var dropTarget: Entity?
@@ -679,15 +687,24 @@ private struct HierarchyBackgroundDropDelegate: DropDelegate {
         itemProvider.loadObject(ofClass: NSString.self) { item, _ in
             guard let str = item as? NSString else { return }
             let string = str as String
-            guard string.hasPrefix("mc-entity:") else { return }
-            let idStr = String(string.dropFirst("mc-entity:".count))
-            guard let entityID = UInt64(idStr) else { return }
-            let dragged = Entity(id: entityID)
 
-            DispatchQueue.main.async {
-                state.removeEntityFromAllCollections(dragged)
-                if state.sceneGraph.parent(of: dragged) != nil {
-                    state.reparentEntity(dragged, to: nil)
+            if string.hasPrefix("mc-entity:") {
+                let idStr = String(string.dropFirst("mc-entity:".count))
+                guard let entityID = UInt64(idStr) else { return }
+                let dragged = Entity(id: entityID)
+
+                DispatchQueue.main.async {
+                    state.removeEntityFromAllCollections(dragged)
+                    if state.sceneGraph.parent(of: dragged) != nil {
+                        state.reparentEntity(dragged, to: nil)
+                    }
+                }
+            } else if let guid = UUID(uuidString: string),
+                      let url = state.assetDatabase.resolveURL(for: guid),
+                      AssetCategory.meshExtensions.contains(url.pathExtension.lowercased()) {
+                let name = url.deletingPathExtension().lastPathComponent
+                DispatchQueue.main.async {
+                    state.addMeshAssetToScene(guid: guid, name: name)
                 }
             }
         }

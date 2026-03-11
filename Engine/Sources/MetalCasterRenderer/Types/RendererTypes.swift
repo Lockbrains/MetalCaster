@@ -604,6 +604,51 @@ public struct FullscreenBlurUniforms: Sendable {
     }
 }
 
+// MARK: - Height Fog Uniforms (CPU ↔ GPU)
+
+/// Uniform buffer for height-based atmospheric fog post-process pass.
+/// Memory layout must match the MSL `HeightFogUniforms` struct exactly.
+public struct HeightFogUniforms: Sendable {
+    public var fogColorR: Float
+    public var fogColorG: Float
+    public var fogColorB: Float
+    public var density: Float
+    public var baseHeight: Float
+    public var heightFalloff: Float
+    public var maxOpacity: Float
+    public var startDistance: Float
+    public var inscatterColorR: Float
+    public var inscatterColorG: Float
+    public var inscatterColorB: Float
+    public var inscatterIntensity: Float
+    public var inscatterExponent: Float
+    /// 0 = exponential, 1 = exponential squared
+    public var mode: Float
+    public var nearZ: Float
+    public var farZ: Float
+    public var cameraPositionX: Float
+    public var cameraPositionY: Float
+    public var cameraPositionZ: Float
+    public var screenWidth: Float
+    public var screenHeight: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+    public var _pad2: Float = 0
+    public var inverseViewProjection: simd_float4x4
+
+    public init() {
+        fogColorR = 0.6; fogColorG = 0.65; fogColorB = 0.75
+        density = 0.02; baseHeight = 0.0; heightFalloff = 0.2
+        maxOpacity = 1.0; startDistance = 0.0
+        inscatterColorR = 1.0; inscatterColorG = 0.9; inscatterColorB = 0.7
+        inscatterIntensity = 0.0; inscatterExponent = 8.0
+        mode = 0; nearZ = 0.1; farZ = 1000
+        cameraPositionX = 0; cameraPositionY = 0; cameraPositionZ = 0
+        screenWidth = 1920; screenHeight = 1080
+        inverseViewProjection = matrix_identity_float4x4
+    }
+}
+
 // MARK: - Fullscreen Outline Uniforms (CPU ↔ GPU)
 
 public struct FullscreenOutlineUniforms: Sendable {

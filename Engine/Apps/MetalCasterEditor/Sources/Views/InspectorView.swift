@@ -1,6 +1,8 @@
 import SwiftUI
 import simd
 import UniformTypeIdentifiers
+import SceneKit
+import AVFoundation
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
@@ -29,6 +31,24 @@ struct InspectorView: View {
         } else if let assetEntry = state.selectedAssetEntry,
                   Self.textureExtensions.contains(assetEntry.fileExtension.lowercased()) {
             textureAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .meshes {
+            meshAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .scenes {
+            sceneAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .shaders {
+            shaderAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .audio {
+            audioAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .prefabs {
+            prefabAssetInspector(entry: assetEntry)
+        } else if let assetEntry = state.selectedAssetEntry,
+                  assetEntry.category == .gameplay {
+            gameplayAssetInspector(entry: assetEntry)
         } else {
             ZStack {
                 MCTheme.background
@@ -81,6 +101,22 @@ struct InspectorView: View {
                 }
                 if state.engine.world.hasComponent(PostProcessVolumeComponent.self, on: entity) {
                     postProcessVolumeSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(LightmapComponent.self, on: entity) {
+                    lightmapSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(LightProbeComponent.self, on: entity) {
+                    lightProbeSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(ReflectionProbeComponent.self, on: entity) {
+                    reflectionProbeSection(entity)
+                    sectionDivider()
+                }
+                if state.engine.world.hasComponent(HeightFogComponent.self, on: entity) {
+                    heightFogSection(entity)
                     sectionDivider()
                 }
                 if state.engine.world.hasComponent(PhysicsBodyComponent.self, on: entity) {
@@ -2287,6 +2323,389 @@ struct InspectorView: View {
         }
     }
 
+    // MARK: - Lightmap Section
+
+    @ViewBuilder
+    private func lightmapSection(_ entity: Entity) -> some View {
+        MCSection(title: "Lightmap") {
+            removeComponentButton(LightmapComponent.self, from: entity, label: "Remove Lightmap")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("UV Channel")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Text("\(state.engine.world.getComponent(LightmapComponent.self, from: entity)?.uvChannel ?? 1)")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textPrimary)
+                    Spacer()
+                }
+
+                Picker("Resolution", selection: Binding(
+                    get: { state.engine.world.getComponent(LightmapComponent.self, from: entity)?.resolution ?? 256 },
+                    set: { val in state.updateComponent(LightmapComponent.self, on: entity) { $0.resolution = val } }
+                )) {
+                    Text("64").tag(64)
+                    Text("128").tag(128)
+                    Text("256").tag(256)
+                    Text("512").tag(512)
+                    Text("1024").tag(1024)
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Picker("Quality", selection: Binding(
+                    get: { state.engine.world.getComponent(LightmapComponent.self, from: entity)?.bakeQuality ?? .medium },
+                    set: { val in state.updateComponent(LightmapComponent.self, on: entity) { $0.bakeQuality = val } }
+                )) {
+                    ForEach(LightmapComponent.BakeQuality.allCases, id: \.self) { q in
+                        Text(q.rawValue).tag(q)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                HStack {
+                    Text("Intensity")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { state.engine.world.getComponent(LightmapComponent.self, from: entity)?.intensity ?? 1 },
+                        set: { val in state.updateComponent(LightmapComponent.self, on: entity) { $0.intensity = val } }
+                    ), in: 0...5)
+                    Text(String(format: "%.2f", state.engine.world.getComponent(LightmapComponent.self, from: entity)?.intensity ?? 1))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                Toggle("Contribute GI", isOn: Binding(
+                    get: { state.engine.world.getComponent(LightmapComponent.self, from: entity)?.contributeGI ?? true },
+                    set: { val in state.updateComponent(LightmapComponent.self, on: entity) { $0.contributeGI = val } }
+                ))
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+                let path = state.engine.world.getComponent(LightmapComponent.self, from: entity)?.lightmapTexturePath
+                HStack {
+                    Text("Baked")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                    Spacer()
+                    Text(path ?? "Not baked")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(path != nil ? MCTheme.statusGreen : MCTheme.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    // MARK: - Light Probe Section
+
+    @ViewBuilder
+    private func lightProbeSection(_ entity: Entity) -> some View {
+        MCSection(title: "Light Probe") {
+            removeComponentButton(LightProbeComponent.self, from: entity, label: "Remove Light Probe")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Mode", selection: Binding(
+                    get: { state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.mode ?? .baked },
+                    set: { val in state.updateComponent(LightProbeComponent.self, on: entity) { $0.mode = val } }
+                )) {
+                    ForEach(LightProbeComponent.ProbeMode.allCases, id: \.self) { m in
+                        Text(m.rawValue).tag(m)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                HStack {
+                    Text("Radius")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.radius ?? 10 },
+                        set: { val in state.updateComponent(LightProbeComponent.self, on: entity) { $0.radius = val } }
+                    ), in: 0.5...100)
+                    Text(String(format: "%.1f", state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.radius ?? 10))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                HStack {
+                    Text("Intensity")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.intensity ?? 1 },
+                        set: { val in state.updateComponent(LightProbeComponent.self, on: entity) { $0.intensity = val } }
+                    ), in: 0...5)
+                    Text(String(format: "%.2f", state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.intensity ?? 1))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                let isBaked = state.engine.world.getComponent(LightProbeComponent.self, from: entity)?.isBaked ?? false
+                HStack {
+                    Text("Status")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                    Spacer()
+                    MCStatusDot(color: isBaked ? MCTheme.statusGreen : MCTheme.statusGray)
+                    Text(isBaked ? "Baked" : "Not baked")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(isBaked ? MCTheme.statusGreen : MCTheme.textTertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Reflection Probe Section
+
+    @ViewBuilder
+    private func reflectionProbeSection(_ entity: Entity) -> some View {
+        let probe = state.engine.world.getComponent(ReflectionProbeComponent.self, from: entity)
+
+        MCSection(title: "Reflection Probe") {
+            removeComponentButton(ReflectionProbeComponent.self, from: entity, label: "Remove Reflection Probe")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Type", selection: Binding(
+                    get: { probe?.probeType ?? .baked },
+                    set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.probeType = val } }
+                )) {
+                    ForEach(ReflectionProbeComponent.ProbeType.allCases, id: \.self) { t in
+                        Text(t.rawValue).tag(t)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Picker("Shape", selection: Binding(
+                    get: { probe?.shape ?? .box },
+                    set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.shape = val } }
+                )) {
+                    ForEach(ReflectionProbeComponent.ProbeShape.allCases, id: \.self) { s in
+                        Text(s.rawValue).tag(s)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                Picker("Resolution", selection: Binding(
+                    get: { probe?.resolution ?? 256 },
+                    set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.resolution = val } }
+                )) {
+                    Text("64").tag(64)
+                    Text("128").tag(128)
+                    Text("256").tag(256)
+                    Text("512").tag(512)
+                    Text("1024").tag(1024)
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                if probe?.shape == .sphere {
+                    HStack {
+                        Text("Radius")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                            .frame(width: 70, alignment: .leading)
+                        Slider(value: Binding(
+                            get: { probe?.radius ?? 10 },
+                            set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.radius = val } }
+                        ), in: 0.5...200)
+                        Text(String(format: "%.1f", probe?.radius ?? 10))
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                } else {
+                    liveVec3Row(label: "Box Extents", entity: entity,
+                        get: { probe?.boxExtents ?? SIMD3<Float>(5, 5, 5) },
+                        set: { v in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.boxExtents = v } },
+                        step: 0.5)
+                }
+
+                HStack {
+                    Text("Intensity")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { probe?.intensity ?? 1 },
+                        set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.intensity = val } }
+                    ), in: 0...5)
+                    Text(String(format: "%.2f", probe?.intensity ?? 1))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                HStack {
+                    Text("Blend Dist")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { probe?.blendDistance ?? 1 },
+                        set: { val in state.updateComponent(ReflectionProbeComponent.self, on: entity) { $0.blendDistance = val } }
+                    ), in: 0...20)
+                    Text(String(format: "%.1f", probe?.blendDistance ?? 1))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                let isBaked = probe?.isBaked ?? false
+                HStack {
+                    Text("Status")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                    Spacer()
+                    MCStatusDot(color: isBaked ? MCTheme.statusGreen : MCTheme.statusGray)
+                    Text(isBaked ? "Baked" : "Not baked")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(isBaked ? MCTheme.statusGreen : MCTheme.textTertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Height Fog Section
+
+    @ViewBuilder
+    private func heightFogSection(_ entity: Entity) -> some View {
+        let fog = state.engine.world.getComponent(HeightFogComponent.self, from: entity)
+
+        MCSection(title: "Height Atmospheric Fog") {
+            removeComponentButton(HeightFogComponent.self, from: entity, label: "Remove Height Fog")
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Mode", selection: Binding(
+                    get: { fog?.mode ?? .exponential },
+                    set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.mode = val } }
+                )) {
+                    ForEach(HeightFogComponent.FogMode.allCases, id: \.self) { m in
+                        Text(m.rawValue).tag(m)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textPrimary)
+
+                liveColorRow(label: "Fog Color", entity: entity,
+                    get: { fog?.color ?? SIMD3<Float>(0.6, 0.65, 0.75) },
+                    set: { v in state.updateComponent(HeightFogComponent.self, on: entity) { $0.color = v } })
+
+                HStack {
+                    Text("Density")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fog?.density ?? 0.02 },
+                        set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.density = val } }
+                    ), in: 0.001...1.0)
+                    Text(String(format: "%.3f", fog?.density ?? 0.02))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                liveFloatRow(label: "Base Height", entity: entity,
+                    get: { fog?.baseHeight ?? 0 },
+                    set: { v in state.updateComponent(HeightFogComponent.self, on: entity) { $0.baseHeight = v } })
+
+                HStack {
+                    Text("Falloff")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fog?.heightFalloff ?? 0.2 },
+                        set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.heightFalloff = val } }
+                    ), in: 0.01...5.0)
+                    Text(String(format: "%.2f", fog?.heightFalloff ?? 0.2))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                HStack {
+                    Text("Max Opacity")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fog?.maxOpacity ?? 1 },
+                        set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.maxOpacity = val } }
+                    ), in: 0...1)
+                    Text(String(format: "%.2f", fog?.maxOpacity ?? 1))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                liveFloatRow(label: "Start Dist", entity: entity,
+                    get: { fog?.startDistance ?? 0 },
+                    set: { v in state.updateComponent(HeightFogComponent.self, on: entity) { $0.startDistance = v } })
+
+                Text("Inscattering")
+                    .font(MCTheme.fontCaption.bold())
+                    .foregroundStyle(MCTheme.textSecondary)
+                    .padding(.top, 4)
+
+                liveColorRow(label: "Color", entity: entity,
+                    get: { fog?.inscatteringColor ?? SIMD3<Float>(1, 0.9, 0.7) },
+                    set: { v in state.updateComponent(HeightFogComponent.self, on: entity) { $0.inscatteringColor = v } })
+
+                HStack {
+                    Text("Intensity")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fog?.inscatteringIntensity ?? 0 },
+                        set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.inscatteringIntensity = val } }
+                    ), in: 0...2)
+                    Text(String(format: "%.2f", fog?.inscatteringIntensity ?? 0))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+
+                HStack {
+                    Text("Exponent")
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 70, alignment: .leading)
+                    Slider(value: Binding(
+                        get: { fog?.inscatteringExponent ?? 8 },
+                        set: { val in state.updateComponent(HeightFogComponent.self, on: entity) { $0.inscatteringExponent = val } }
+                    ), in: 1...32)
+                    Text(String(format: "%.1f", fog?.inscatteringExponent ?? 8))
+                        .font(MCTheme.fontCaption)
+                        .foregroundStyle(MCTheme.textSecondary)
+                        .frame(width: 40, alignment: .trailing)
+                }
+            }
+        }
+    }
+
     // MARK: - Physics Body Section
 
     @ViewBuilder
@@ -2775,6 +3194,701 @@ struct InspectorView: View {
         return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
     }
 
+    // MARK: - Mesh Asset Inspector
+
+    @ViewBuilder
+    private func meshAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                meshPreviewSection(entry: entry)
+                sectionDivider()
+                meshInfoSection(entry: entry)
+                sectionDivider()
+                meshActionsSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func meshPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                    #if canImport(SceneKit)
+                    MCScenePreviewView(url: url)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 220)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(MCTheme.panelBorder, lineWidth: 1)
+                        )
+                    #endif
+                } else {
+                    Image(systemName: "cube")
+                        .font(.system(size: 40, weight: .thin))
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .frame(height: 100)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func meshInfoSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: entry.fileExtension.uppercased())
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+                infoRow("Category", value: "Mesh")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func meshActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    state.addMeshAssetToScene(guid: entry.guid, name: entry.name)
+                } label: {
+                    HStack {
+                        Image(systemName: "plus.square.on.square")
+                        Text("Add to Scene")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    // MARK: - Scene Asset Inspector
+
+    @ViewBuilder
+    private func sceneAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                scenePreviewSection(entry: entry)
+                sectionDivider()
+                sceneInfoSection(entry: entry)
+                sectionDivider()
+                sceneActionsSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func scenePreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                Image(systemName: "film")
+                    .font(.system(size: 40, weight: .thin))
+                    .foregroundStyle(MCTheme.textTertiary)
+                    .frame(height: 100)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sceneInfoSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: entry.fileExtension.uppercased())
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+                infoRow("Modified", value: formatDate(entry.modifiedDate))
+                infoRow("Category", value: "Scene")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sceneActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        state.requestLoadScene(from: url)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "play.fill")
+                        Text("Load Scene")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                #if os(macOS)
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "folder")
+                        Text("Show in Finder")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Shader Asset Inspector
+
+    @ViewBuilder
+    private func shaderAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                shaderPreviewSection(entry: entry)
+                sectionDivider()
+                shaderInfoSection(entry: entry)
+                sectionDivider()
+                shaderActionsSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func shaderPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   let source = try? String(contentsOf: url, encoding: .utf8) {
+                    let lines = source.components(separatedBy: .newlines)
+                    let preview = lines.prefix(15).joined(separator: "\n")
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(preview)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(MCTheme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(MCTheme.panelBorder, lineWidth: 1)
+                    )
+
+                    if lines.count > 15 {
+                        Text("\(lines.count - 15) more lines...")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                } else {
+                    Image(systemName: "function")
+                        .font(.system(size: 40, weight: .thin))
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .frame(height: 100)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func shaderInfoSection(entry: AssetEntry) -> some View {
+        let functions = detectShaderFunctions(for: entry)
+
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: "Metal Shader")
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+
+                if !functions.isEmpty {
+                    HStack(alignment: .top) {
+                        Text("Functions")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textSecondary)
+                            .frame(width: 80, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(functions, id: \.self) { fn in
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(shaderFunctionColor(fn))
+                                        .frame(width: 6, height: 6)
+                                    Text(fn)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(MCTheme.textPrimary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+            }
+        }
+    }
+
+    private func detectShaderFunctions(for entry: AssetEntry) -> [String] {
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid),
+              let source = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        var results: [String] = []
+        if source.contains("vertex") { results.append("vertex") }
+        if source.contains("fragment") { results.append("fragment") }
+        if source.contains("kernel") { results.append("kernel") }
+        return results
+    }
+
+    private func shaderFunctionColor(_ type: String) -> Color {
+        switch type {
+        case "vertex":   return .blue
+        case "fragment": return .green
+        case "kernel":   return .orange
+        default:         return MCTheme.textTertiary
+        }
+    }
+
+    @ViewBuilder
+    private func shaderActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                #if os(macOS)
+                Button {
+                    guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return }
+                    let xcodeBundleID = "com.apple.dt.Xcode"
+                    if let xcodeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: xcodeBundleID) {
+                        NSWorkspace.shared.open(
+                            [url],
+                            withApplicationAt: xcodeURL,
+                            configuration: NSWorkspace.OpenConfiguration()
+                        )
+                    } else {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "hammer")
+                        Text("Open in Xcode")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "folder")
+                        Text("Show in Finder")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Audio Asset Inspector
+
+    @ViewBuilder
+    private func audioAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                audioPreviewSection(entry: entry)
+                sectionDivider()
+                audioInfoSection(entry: entry)
+                sectionDivider()
+                audioActionsSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func audioPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 12) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 36, weight: .thin))
+                    .foregroundStyle(MCTheme.textTertiary)
+                    .frame(height: 60)
+                    .frame(maxWidth: .infinity)
+
+                AudioPlaybackControl(url: state.assetDatabase.resolveURL(for: entry.guid))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func audioInfoSection(entry: AssetEntry) -> some View {
+        let meta = loadAudioMetadata(for: entry)
+
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: entry.fileExtension.uppercased())
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+                if let meta = meta {
+                    infoRow("Duration", value: formatDuration(meta.duration))
+                    infoRow("Sample Rate", value: "\(Int(meta.sampleRate)) Hz")
+                    infoRow("Channels", value: "\(meta.channels)")
+                }
+            }
+        }
+    }
+
+    private struct AudioMetadata {
+        let duration: TimeInterval
+        let sampleRate: Double
+        let channels: Int
+    }
+
+    private func loadAudioMetadata(for entry: AssetEntry) -> AudioMetadata? {
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return nil }
+        guard let player = try? AVAudioPlayer(contentsOf: url) else { return nil }
+        return AudioMetadata(
+            duration: player.duration,
+            sampleRate: player.format.sampleRate,
+            channels: Int(player.format.channelCount)
+        )
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        let ms = Int((seconds.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", mins, secs, ms)
+    }
+
+    @ViewBuilder
+    private func audioActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                #if os(macOS)
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "folder")
+                        Text("Show in Finder")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Prefab Asset Inspector
+
+    @ViewBuilder
+    private func prefabAssetInspector(entry: AssetEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                prefabPreviewSection(entry: entry)
+                sectionDivider()
+                prefabInfoSection(entry: entry)
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func prefabPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                Image(systemName: "square.on.square")
+                    .font(.system(size: 40, weight: .thin))
+                    .foregroundStyle(MCTheme.textTertiary)
+                    .frame(height: 100)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func prefabInfoSection(entry: AssetEntry) -> some View {
+        let summary = loadPrefabSummary(for: entry)
+
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: "Prefab")
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+                if let summary = summary {
+                    infoRow("Keys", value: "\(summary.topLevelKeys)")
+                }
+            }
+        }
+    }
+
+    private struct PrefabSummary {
+        let topLevelKeys: Int
+    }
+
+    private func loadPrefabSummary(for entry: AssetEntry) -> PrefabSummary? {
+        guard let url = state.assetDatabase.resolveURL(for: entry.guid),
+              let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return PrefabSummary(topLevelKeys: json.count)
+    }
+
+    // MARK: - Gameplay Asset Inspector
+
+    @ViewBuilder
+    private func gameplayAssetInspector(entry: AssetEntry) -> some View {
+        let ext = entry.fileExtension.lowercased()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                if ext == "prompt" {
+                    promptAssetPreviewSection(entry: entry)
+                    sectionDivider()
+                    promptAssetInfoSection(entry: entry)
+                    sectionDivider()
+                    promptAssetActionsSection(entry: entry)
+                } else {
+                    swiftAssetPreviewSection(entry: entry)
+                    sectionDivider()
+                    swiftAssetInfoSection(entry: entry)
+                    sectionDivider()
+                    swiftAssetActionsSection(entry: entry)
+                }
+            }
+            .padding(MCTheme.panelPadding)
+        }
+        .background(MCTheme.background)
+    }
+
+    @ViewBuilder
+    private func promptAssetPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Prompt Script") {
+            VStack(spacing: 8) {
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   let promptData = try? PromptScriptTemplate.load(from: url) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bubble.left.and.text.bubble.right")
+                            .font(.system(size: 24, weight: .thin))
+                            .foregroundStyle(MCTheme.textTertiary)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(promptData.name.isEmpty ? "Untitled" : promptData.name)
+                                .font(MCTheme.fontBody)
+                                .foregroundStyle(MCTheme.textPrimary)
+
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(promptData.isComplete ? Color.green : Color.orange)
+                                    .frame(width: 6, height: 6)
+                                Text(promptData.isComplete ? "Complete" : "Incomplete")
+                                    .font(MCTheme.fontCaption)
+                                    .foregroundStyle(MCTheme.textSecondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
+                        .font(.system(size: 40, weight: .thin))
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .frame(height: 100)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func promptAssetInfoSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: "Prompt Script")
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   let promptData = try? PromptScriptTemplate.load(from: url) {
+                    let fields: [(String, Bool)] = [
+                        ("Initial State", !promptData.initialState.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                        ("Per-Frame", !promptData.perFrameBehavior.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                        ("Interface", !promptData.publicInterface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+                    ]
+                    ForEach(fields, id: \.0) { label, filled in
+                        HStack {
+                            Text(label)
+                                .font(MCTheme.fontCaption)
+                                .foregroundStyle(MCTheme.textSecondary)
+                                .frame(width: 80, alignment: .leading)
+                            HStack(spacing: 4) {
+                                Image(systemName: filled ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(filled ? Color.green : MCTheme.textTertiary)
+                                Text(filled ? "Defined" : "Empty")
+                                    .font(MCTheme.fontCaption)
+                                    .foregroundStyle(filled ? MCTheme.textPrimary : MCTheme.textTertiary)
+                            }
+                            Spacer()
+                        }
+                    }
+
+                    if !promptData.customFields.isEmpty {
+                        infoRow("Custom Fields", value: "\(promptData.customFields.count)")
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func promptAssetActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        state.editingPromptURL = url
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "pencil")
+                        Text("Edit Prompt")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    if let url = state.assetDatabase.resolveURL(for: entry.guid) {
+                        Task {
+                            await state.compilePromptScript(at: url)
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "gearshape.2")
+                        Text("Compile")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func swiftAssetPreviewSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Preview") {
+            VStack(spacing: 8) {
+                if let url = state.assetDatabase.resolveURL(for: entry.guid),
+                   let source = try? String(contentsOf: url, encoding: .utf8) {
+                    let lines = source.components(separatedBy: .newlines)
+                    let preview = lines.prefix(15).joined(separator: "\n")
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(preview)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(MCTheme.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(MCTheme.panelBorder, lineWidth: 1)
+                    )
+
+                    if lines.count > 15 {
+                        Text("\(lines.count - 15) more lines...")
+                            .font(MCTheme.fontCaption)
+                            .foregroundStyle(MCTheme.textTertiary)
+                    }
+                } else {
+                    Image(systemName: "swift")
+                        .font(.system(size: 40, weight: .thin))
+                        .foregroundStyle(MCTheme.textTertiary)
+                        .frame(height: 100)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func swiftAssetInfoSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Info") {
+            VStack(alignment: .leading, spacing: 6) {
+                infoRow("Name", value: "\(entry.name).\(entry.fileExtension)")
+                infoRow("Format", value: "Swift Source")
+                infoRow("File Size", value: formatByteSize(entry.fileSize))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func swiftAssetActionsSection(entry: AssetEntry) -> some View {
+        MCSection(title: "Actions") {
+            VStack(alignment: .leading, spacing: 8) {
+                #if os(macOS)
+                Button {
+                    guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return }
+                    let xcodeBundleID = "com.apple.dt.Xcode"
+                    if let xcodeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: xcodeBundleID) {
+                        NSWorkspace.shared.open(
+                            [url],
+                            withApplicationAt: xcodeURL,
+                            configuration: NSWorkspace.OpenConfiguration()
+                        )
+                    } else {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "hammer")
+                        Text("Open in Xcode")
+                    }
+                    .font(MCTheme.fontCaption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                #endif
+            }
+        }
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
     // MARK: - Gameplay Script Section
 
     @ViewBuilder
@@ -2973,6 +4087,30 @@ struct InspectorView: View {
             onChanged: { v in set(v) },
             step: 0.1,
             labelWidth: 70)
+    }
+
+    private func liveColorRow(label: String, entity: Entity,
+                              get: @escaping () -> SIMD3<Float>,
+                              set: @escaping (SIMD3<Float>) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+                .frame(width: 70, alignment: .leading)
+            ColorPicker("", selection: Binding(
+                get: {
+                    let c = get()
+                    return Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                },
+                set: { newColor in
+                    if let comps = newColor.cgColor?.components, comps.count >= 3 {
+                        set(SIMD3<Float>(Float(comps[0]), Float(comps[1]), Float(comps[2])))
+                    }
+                }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            Spacer()
+        }
     }
 
     private func meshTypeDisplay(_ type: MeshType) -> String {
@@ -3400,6 +4538,77 @@ enum TextureCompression: String, CaseIterable {
         case .astc6x6: return "ASTC 6×6 (Balanced)"
         case .astc8x8: return "ASTC 8×8 (Smallest)"
         case .bc7:     return "BC7 (Desktop)"
+        }
+    }
+}
+
+// MARK: - Audio Playback Control
+
+struct AudioPlaybackControl: View {
+    let url: URL?
+    @State private var player: AVAudioPlayer?
+    @State private var isPlaying = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                togglePlayback()
+            } label: {
+                Image(systemName: isPlaying ? "stop.fill" : "play.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(MCTheme.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(MCTheme.panelBorder)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Text(isPlaying ? "Playing..." : "Tap to play")
+                .font(MCTheme.fontCaption)
+                .foregroundStyle(MCTheme.textSecondary)
+
+            Spacer()
+        }
+        .onDisappear {
+            player?.stop()
+            isPlaying = false
+        }
+        .onChange(of: url) {
+            player?.stop()
+            isPlaying = false
+            player = nil
+        }
+    }
+
+    private func togglePlayback() {
+        if isPlaying {
+            player?.stop()
+            isPlaying = false
+            return
+        }
+        guard let url else { return }
+        do {
+            let newPlayer = try AVAudioPlayer(contentsOf: url)
+            newPlayer.delegate = AudioPlaybackDelegate.shared
+            AudioPlaybackDelegate.shared.onFinish = { [weak newPlayer] in
+                if newPlayer === self.player { isPlaying = false }
+            }
+            newPlayer.play()
+            player = newPlayer
+            isPlaying = true
+        } catch {
+            isPlaying = false
+        }
+    }
+}
+
+private final class AudioPlaybackDelegate: NSObject, AVAudioPlayerDelegate {
+    static let shared = AudioPlaybackDelegate()
+    var onFinish: (() -> Void)?
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onFinish?()
         }
     }
 }

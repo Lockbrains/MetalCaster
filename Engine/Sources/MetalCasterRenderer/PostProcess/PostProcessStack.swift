@@ -47,6 +47,7 @@ public final class PostProcessStack {
     private var fxaaPipeline: MTLRenderPipelineState?
     private var fullscreenBlurPipeline: MTLRenderPipelineState?
     private var fullscreenOutlinePipeline: MTLRenderPipelineState?
+    private var heightFogPipeline: MTLRenderPipelineState?
 
     private var noDepthState: MTLDepthStencilState?
 
@@ -158,6 +159,14 @@ public final class PostProcessStack {
             var u = settings.ssaoUniforms
             encodeFullscreenPass(commandBuffer: commandBuffer, pipeline: pipeline, outputTexture: currentDest,
                 textures: [currentSource, depthTex], bufferData: &u, bufferLength: MemoryLayout<SSAOUniforms>.stride)
+            swap(&currentSource, &currentDest)
+        }
+
+        // Height Fog
+        if settings.enableHeightFog, let pipeline = heightFogPipeline {
+            var u = settings.heightFogUniforms
+            encodeFullscreenPass(commandBuffer: commandBuffer, pipeline: pipeline, outputTexture: currentDest,
+                textures: [currentSource, depthTex], bufferData: &u, bufferLength: MemoryLayout<HeightFogUniforms>.stride)
             swap(&currentSource, &currentDest)
         }
 
@@ -415,6 +424,7 @@ public final class PostProcessStack {
         fxaaPipeline = makePipeline(lib: lib, vertex: vertexFunc, fragment: "fxaa_fragment", format: hdr)
         fullscreenBlurPipeline = makePipeline(lib: lib, vertex: vertexFunc, fragment: "fullscreen_blur_fragment", format: hdr)
         fullscreenOutlinePipeline = makePipeline(lib: lib, vertex: vertexFunc, fragment: "fullscreen_outline_fragment", format: hdr)
+        heightFogPipeline = makePipeline(lib: lib, vertex: vertexFunc, fragment: "height_fog_fragment", format: hdr)
     }
 
     private func makePipeline(lib: MTLLibrary, vertex: MTLFunction, fragment fragName: String, format: MTLPixelFormat) -> MTLRenderPipelineState? {
@@ -474,6 +484,7 @@ public struct VolumePostProcessSettings {
     public var enableFXAA: Bool = false
     public var enableFullscreenBlur: Bool = false
     public var enableFullscreenOutline: Bool = false
+    public var enableHeightFog: Bool = false
 
     public var bloomUniforms: BloomUniforms = .init()
     public var ppUniforms: PostProcessUniforms = .init()
@@ -488,6 +499,7 @@ public struct VolumePostProcessSettings {
     public var fxaaUniforms: FXAAUniforms = .init()
     public var fullscreenBlurUniforms: FullscreenBlurUniforms = .init()
     public var fullscreenOutlineUniforms: FullscreenOutlineUniforms = .init()
+    public var heightFogUniforms: HeightFogUniforms = .init()
 
     public init() {}
 }

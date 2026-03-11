@@ -85,6 +85,36 @@ enum ComponentRegistry {
                     isAvailable: { w, e in !w.hasComponent(CameraComponent.self, on: e) },
                     add: { w, e in w.addComponent(CameraComponent(), to: e) }
                 ),
+                ComponentEntry(
+                    name: "Light Probe",
+                    icon: "circle.grid.3x3",
+                    isAvailable: { w, e in !w.hasComponent(LightProbeComponent.self, on: e) },
+                    add: { w, e in w.addComponent(LightProbeComponent(), to: e) }
+                ),
+                ComponentEntry(
+                    name: "Reflection Probe",
+                    icon: "sparkles",
+                    isAvailable: { w, e in !w.hasComponent(ReflectionProbeComponent.self, on: e) },
+                    add: { w, e in w.addComponent(ReflectionProbeComponent(), to: e) }
+                ),
+                ComponentEntry(
+                    name: "Lightmap",
+                    icon: "sun.max.trianglebadge.exclamationmark",
+                    isAvailable: { w, e in
+                        !w.hasComponent(LightmapComponent.self, on: e) &&
+                        w.hasComponent(MeshComponent.self, on: e)
+                    },
+                    add: { w, e in w.addComponent(LightmapComponent(), to: e) }
+                ),
+            ]),
+
+            ComponentCategory(name: "Environment", icon: "cloud.sun", entries: [
+                ComponentEntry(
+                    name: "Height Fog",
+                    icon: "cloud.fog",
+                    isAvailable: { w, e in !w.hasComponent(HeightFogComponent.self, on: e) },
+                    add: { w, e in w.addComponent(HeightFogComponent(), to: e) }
+                ),
             ]),
 
             ComponentCategory(name: "Physics", icon: "arrow.triangle.branch", entries: [

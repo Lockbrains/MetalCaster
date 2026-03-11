@@ -4,6 +4,7 @@ import simd
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
+import MetalCasterAsset
 
 #if canImport(AppKit)
 import AppKit
@@ -24,6 +25,17 @@ struct SceneEditorView: View {
             SceneOverlayPanel()
         }
         .background(Color.black)
+        .dropDestination(for: String.self) { items, _ in
+            for string in items {
+                guard let guid = UUID(uuidString: string),
+                      let url = state.assetDatabase.resolveURL(for: guid),
+                      AssetCategory.meshExtensions.contains(url.pathExtension.lowercased()) else { continue }
+                let name = url.deletingPathExtension().lastPathComponent
+                state.addMeshAssetToScene(guid: guid, name: name)
+                return true
+            }
+            return false
+        }
     }
 }
 
@@ -367,6 +379,9 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
     func setup(device: MTLDevice) {
         metalDevice = MCMetalDevice(device: device)
         meshPool = MeshPool(device: device)
+        meshPool?.assetResolver = { [weak self] guid in
+            self?.state.assetDatabase.resolveURL(for: guid)
+        }
         shaderCompiler = ShaderCompiler(device: device)
         gridRenderer = GridRenderer(device: device)
         gizmoRenderer = GizmoRenderer(device: device)
@@ -1180,14 +1195,14 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
             encoder.setFrontFacing(.counterClockwise)
             encoder.setDepthStencilState(device.depthStencilState)
 
-            if viewportID == 0 && state.showGrid {
-                let vpMatrix = projMatrix * viewMatrix
-                gridRenderer?.draw(encoder: encoder, viewProjectionMatrix: vpMatrix)
-            }
-
             drawSkybox(encoder: encoder, device: device, pool: pool,
                        viewMatrix: viewMatrix, projMatrix: projMatrix,
                        useHDR: usePostProcess)
+
+            if viewportID == 0 && state.showGrid {
+                let vpMatrix = projMatrix * viewMatrix
+                gridRenderer?.draw(encoder: encoder, viewProjectionMatrix: vpMatrix, cameraPosition: eye)
+            }
 
             encoder.setDepthStencilState(device.depthStencilState)
 
@@ -1588,50 +1603,113 @@ class ViewportCoordinator: NSObject, MTKViewDelegate {
                     settings.fullscreenOutlineUniforms = ou
                 }
 
+                appendHeightFogSettings(
+                    &settings, screenW: screenW, screenH: screenH,
+                    cameraPos: eye,
+                    vpMatrix: projMatrix * viewMatrix,
+                    nearZ: camSys.nearZ, farZ: camSys.farZ
+                )
+
                 ppStack.executeVolume(
                     commandBuffer: commandBuffer,
                     drawableTexture: drawable.texture,
                     settings: settings
                 )
             } else {
-                let ppUniforms = PostProcessUniforms(
-                    exposureMultiplier: camSys.exposureMultiplier,
-                    focusDistance: camSys.focusDistance,
-                    aperture: camSys.apertureValue,
-                    focalLengthM: camSys.focalLengthMM * 0.001,
-                    sensorHeightM: camSys.sensorHeightMM * 0.001,
-                    shutterAngle: camSys.shutterAngleValue,
-                    nearZ: camSys.nearZ,
-                    farZ: camSys.farZ,
-                    screenWidth: screenW,
-                    screenHeight: screenH
-                )
-
                 let vpMatrix = projMatrix * viewMatrix
-                let mbUniforms = MotionBlurUniforms(
-                    viewProjectionMatrix: vpMatrix,
-                    previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
-                    inverseViewProjectionMatrix: vpMatrix.inverse,
-                    shutterAngle: camSys.shutterAngleValue,
-                    screenWidth: screenW,
-                    screenHeight: screenH
+
+                var fogOnlySettings = VolumePostProcessSettings()
+                appendHeightFogSettings(
+                    &fogOnlySettings, screenW: screenW, screenH: screenH,
+                    cameraPos: eye,
+                    vpMatrix: vpMatrix,
+                    nearZ: camSys.nearZ, farZ: camSys.farZ
                 )
 
-                ppStack.execute(
-                    commandBuffer: commandBuffer,
-                    drawableTexture: drawable.texture,
-                    ppUniforms: ppUniforms,
-                    mbUniforms: mbUniforms,
-                    enableDoF: true,
-                    enableExposure: true,
-                    enableMotionBlur: true
-                )
+                if fogOnlySettings.enableHeightFog {
+                    ppStack.executeVolume(
+                        commandBuffer: commandBuffer,
+                        drawableTexture: drawable.texture,
+                        settings: fogOnlySettings
+                    )
+                } else {
+                    let ppUniforms = PostProcessUniforms(
+                        exposureMultiplier: camSys.exposureMultiplier,
+                        focusDistance: camSys.focusDistance,
+                        aperture: camSys.apertureValue,
+                        focalLengthM: camSys.focalLengthMM * 0.001,
+                        sensorHeightM: camSys.sensorHeightMM * 0.001,
+                        shutterAngle: camSys.shutterAngleValue,
+                        nearZ: camSys.nearZ,
+                        farZ: camSys.farZ,
+                        screenWidth: screenW,
+                        screenHeight: screenH
+                    )
+
+                    let mbUniforms = MotionBlurUniforms(
+                        viewProjectionMatrix: vpMatrix,
+                        previousViewProjectionMatrix: camSys.previousViewProjectionMatrix,
+                        inverseViewProjectionMatrix: vpMatrix.inverse,
+                        shutterAngle: camSys.shutterAngleValue,
+                        screenWidth: screenW,
+                        screenHeight: screenH
+                    )
+
+                    ppStack.execute(
+                        commandBuffer: commandBuffer,
+                        drawableTexture: drawable.texture,
+                        ppUniforms: ppUniforms,
+                        mbUniforms: mbUniforms,
+                        enableDoF: true,
+                        enableExposure: true,
+                        enableMotionBlur: true
+                    )
+                }
             }
         }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
+    }
+
+    // MARK: - Height Fog Builder
+
+    private func appendHeightFogSettings(
+        _ settings: inout VolumePostProcessSettings,
+        screenW: Float, screenH: Float,
+        cameraPos: SIMD3<Float>,
+        vpMatrix: simd_float4x4,
+        nearZ: Float, farZ: Float
+    ) {
+        let fogData = state.probeSystem.heightFog
+        guard fogData.enabled != 0 else { return }
+
+        settings.enableHeightFog = true
+        var fu = HeightFogUniforms()
+        fu.fogColorR = fogData.color.x
+        fu.fogColorG = fogData.color.y
+        fu.fogColorB = fogData.color.z
+        fu.density = fogData.density
+        fu.baseHeight = fogData.baseHeight
+        fu.heightFalloff = fogData.heightFalloff
+        fu.maxOpacity = fogData.maxOpacity
+        fu.startDistance = fogData.startDistance
+        fu.inscatterColorR = fogData.inscatteringColor.x
+        fu.inscatterColorG = fogData.inscatteringColor.y
+        fu.inscatterColorB = fogData.inscatteringColor.z
+        fu.inscatterIntensity = fogData.inscatteringIntensity
+        fu.inscatterExponent = fogData.inscatteringExponent
+        fu.mode = fogData.mode == 0 ? 0 : 1
+        fu.nearZ = nearZ
+        fu.farZ = farZ
+        fu.cameraPositionX = cameraPos.x
+        fu.cameraPositionY = cameraPos.y
+        fu.cameraPositionZ = cameraPos.z
+        fu.screenWidth = screenW
+        fu.screenHeight = screenH
+        fu.inverseViewProjection = vpMatrix.inverse
+        settings.heightFogUniforms = fu
     }
 
     // MARK: - Per-Material Pipeline Resolution

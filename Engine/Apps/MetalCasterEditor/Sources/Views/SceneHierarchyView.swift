@@ -2,6 +2,7 @@ import SwiftUI
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
+import MetalCasterAsset
 
 struct SceneHierarchyView: View {
     @Environment(EditorState.self) private var state
@@ -64,6 +65,17 @@ struct SceneHierarchyView: View {
                             state.addMeshEntity(name: meshType.displayName, meshType: meshType)
                         }
                     }
+                    let meshAssets = state.meshAssetEntries()
+                    if !meshAssets.isEmpty {
+                        Divider()
+                        Menu("From Project") {
+                            ForEach(meshAssets) { entry in
+                                Button(entry.name) {
+                                    state.addMeshAssetToScene(guid: entry.guid, name: entry.name)
+                                }
+                            }
+                        }
+                    }
                 }
                 Button("Camera") { state.addCamera() }
                 Button("Directional Light") { state.addDirectionalLight() }
@@ -73,6 +85,12 @@ struct SceneHierarchyView: View {
                 Button("Skybox") { state.addSkybox() }
                     .disabled(hasSkybox)
                 Button("Post Process Volume") { state.addPostProcessVolume() }
+                Divider()
+                Button("Light Probe") { state.addLightProbe() }
+                Button("Reflection Probe") { state.addReflectionProbe() }
+                let hasHeightFog = !state.engine.world.query(HeightFogComponent.self).isEmpty
+                Button("Height Atmospheric Fog") { state.addHeightFog() }
+                    .disabled(hasHeightFog)
             }
             Divider()
             Button("New Collection") { state.createCollection() }

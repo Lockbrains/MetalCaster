@@ -110,6 +110,18 @@ public final class USDExporter {
             if let uiPanel = world.getComponent(UIPanelComponent.self, from: entity) {
                 entry.uiPanel = uiPanel
             }
+            if let lightmap = world.getComponent(LightmapComponent.self, from: entity) {
+                entry.lightmap = lightmap
+            }
+            if let lightProbe = world.getComponent(LightProbeComponent.self, from: entity) {
+                entry.lightProbe = lightProbe
+            }
+            if let reflectionProbe = world.getComponent(ReflectionProbeComponent.self, from: entity) {
+                entry.reflectionProbe = reflectionProbe
+            }
+            if let heightFog = world.getComponent(HeightFogComponent.self, from: entity) {
+                entry.heightFog = heightFog
+            }
             
             sidecar.entities.append(entry)
         }
@@ -348,5 +360,9 @@ public struct SceneSidecar: Codable {
         public var uiLabel: UILabelComponent?
         public var uiImage: UIImageComponent?
         public var uiPanel: UIPanelComponent?
+        public var lightmap: LightmapComponent?
+        public var lightProbe: LightProbeComponent?
+        public var reflectionProbe: ReflectionProbeComponent?
+        public var heightFog: HeightFogComponent?
     }
 }

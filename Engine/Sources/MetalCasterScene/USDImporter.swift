@@ -319,6 +319,18 @@ public final class USDImporter {
         if let uiPanel = meta?.uiPanel {
             world.addComponent(uiPanel, to: entity)
         }
+        if let lightmap = meta?.lightmap {
+            world.addComponent(lightmap, to: entity)
+        }
+        if let lightProbe = meta?.lightProbe {
+            world.addComponent(lightProbe, to: entity)
+        }
+        if let reflectionProbe = meta?.reflectionProbe {
+            world.addComponent(reflectionProbe, to: entity)
+        }
+        if let heightFog = meta?.heightFog {
+            world.addComponent(heightFog, to: entity)
+        }
         
         return entity
     }

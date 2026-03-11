@@ -193,6 +193,41 @@ struct MetalCasterEditorApp: App {
                 }
                 .disabled(editorState == nil)
 
+                Button("Scene Composer Pro") {
+                    editorState?.showSceneComposer = true
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(editorState == nil)
+
+                Divider()
+
+                Section("Scene Composer Pro") {
+                    Button("New Terrain") {
+                        NotificationCenter.default.post(name: .sceneComposerNew, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Open Terrain...") {
+                        NotificationCenter.default.post(name: .sceneComposerOpen, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Save Terrain") {
+                        NotificationCenter.default.post(name: .sceneComposerSave, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Save Terrain As...") {
+                        NotificationCenter.default.post(name: .sceneComposerSaveAs, object: nil)
+                    }
+                    .disabled(editorState == nil)
+
+                    Button("Export as USDA...") {
+                        NotificationCenter.default.post(name: .sceneComposerExportUSDA, object: nil)
+                    }
+                    .disabled(editorState == nil)
+                }
+
                 Divider()
 
                 Section("SDF Canvas Pro") {
@@ -218,6 +253,15 @@ struct MetalCasterEditorApp: App {
 
                     Button("Export SDF Mesh...") {
                         NotificationCenter.default.post(name: .sdfCanvasExport, object: nil)
+                    }
+                    .disabled(editorState == nil)
+                }
+
+                Divider()
+
+                Section("Convert") {
+                    Button("Import & Convert Model...") {
+                        editorState?.showModelConverterPanel = true
                     }
                     .disabled(editorState == nil)
                 }

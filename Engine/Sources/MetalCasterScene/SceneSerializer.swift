@@ -85,6 +85,18 @@ public final class SceneSerializer {
             if let uiPanel = world.getComponent(UIPanelComponent.self, from: entity) {
                 entityData.uiPanel = uiPanel
             }
+            if let lightmap = world.getComponent(LightmapComponent.self, from: entity) {
+                entityData.lightmap = lightmap
+            }
+            if let lightProbe = world.getComponent(LightProbeComponent.self, from: entity) {
+                entityData.lightProbe = lightProbe
+            }
+            if let reflectionProbe = world.getComponent(ReflectionProbeComponent.self, from: entity) {
+                entityData.reflectionProbe = reflectionProbe
+            }
+            if let heightFog = world.getComponent(HeightFogComponent.self, from: entity) {
+                entityData.heightFog = heightFog
+            }
             
             sceneData.entities.append(entityData)
         }
@@ -175,6 +187,18 @@ public final class SceneSerializer {
             if let uiPanel = ed.uiPanel {
                 world.addComponent(uiPanel, to: entity)
             }
+            if let lightmap = ed.lightmap {
+                world.addComponent(lightmap, to: entity)
+            }
+            if let lightProbe = ed.lightProbe {
+                world.addComponent(lightProbe, to: entity)
+            }
+            if let reflectionProbe = ed.reflectionProbe {
+                world.addComponent(reflectionProbe, to: entity)
+            }
+            if let heightFog = ed.heightFog {
+                world.addComponent(heightFog, to: entity)
+            }
         }
     }
 }
@@ -209,4 +233,8 @@ struct EntityData: Codable {
     var uiLabel: UILabelComponent?
     var uiImage: UIImageComponent?
     var uiPanel: UIPanelComponent?
+    var lightmap: LightmapComponent?
+    var lightProbe: LightProbeComponent?
+    var reflectionProbe: ReflectionProbeComponent?
+    var heightFog: HeightFogComponent?
 }

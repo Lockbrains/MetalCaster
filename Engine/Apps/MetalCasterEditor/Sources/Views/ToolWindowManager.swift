@@ -4,15 +4,17 @@ import AppKit
 import MetalCasterRenderer
 
 enum ToolWindowKind: String {
-    case shaderCanvas = "Shader Canvas Pro"
-    case sdfCanvas = "SDF Canvas Pro"
-    case profiler = "Profiler"
+    case shaderCanvas  = "Shader Canvas Pro"
+    case sdfCanvas     = "SDF Canvas Pro"
+    case sceneComposer = "Scene Composer Pro"
+    case profiler      = "Profiler"
     case frameDebugger = "Frame Debugger"
 
     var defaultSize: NSSize {
         switch self {
         case .shaderCanvas:  NSSize(width: 1280, height: 800)
         case .sdfCanvas:     NSSize(width: 1100, height: 720)
+        case .sceneComposer: NSSize(width: 1400, height: 900)
         case .profiler:      NSSize(width: 680, height: 520)
         case .frameDebugger: NSSize(width: 780, height: 560)
         }
@@ -40,6 +42,7 @@ enum ToolWindowManager {
         switch kind {
         case .shaderCanvas:  return
         case .sdfCanvas:     content = AnyView(SDFCanvasProView().environment(state))
+        case .sceneComposer: content = AnyView(SceneComposerProView().environment(state))
         case .profiler:      content = AnyView(ProfilerView().environment(state))
         case .frameDebugger: content = AnyView(FrameDebuggerView().environment(state))
         }
@@ -127,8 +130,8 @@ enum ToolWindowManager {
         window.titlebarAppearsTransparent = true
         window.backgroundColor = .black
         window.isOpaque = true
-        // SDF canvas uses in-canvas drag/drop heavily; avoid stealing drags as window moves.
-        window.isMovableByWindowBackground = (kind != .sdfCanvas)
+        // Canvas tools use in-view mouse drags; don't let the window steal them.
+        window.isMovableByWindowBackground = (kind != .sdfCanvas && kind != .sceneComposer)
         window.center()
         window.makeKeyAndOrderFront(nil)
         window.isReleasedWhenClosed = false
@@ -141,6 +144,7 @@ enum ToolWindowManager {
             switch kind {
             case .shaderCanvas:  state.showShaderCanvas = false
             case .sdfCanvas:     state.showSDFCanvas = false
+            case .sceneComposer: state.showSceneComposer = false
             case .profiler:      state.showProfiler = false
             case .frameDebugger: state.showFrameDebugger = false
             }

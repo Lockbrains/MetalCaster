@@ -30,6 +30,10 @@ public struct EntitySnapshot {
     public var uiLabel: UILabelComponent?
     public var uiImage: UIImageComponent?
     public var uiPanel: UIPanelComponent?
+    public var lightmap: LightmapComponent?
+    public var lightProbe: LightProbeComponent?
+    public var reflectionProbe: ReflectionProbeComponent?
+    public var heightFog: HeightFogComponent?
 
     public static func capture(entity: Entity, world: World) -> EntitySnapshot {
         EntitySnapshot(
@@ -52,7 +56,11 @@ public struct EntitySnapshot {
             uiElement: world.getComponent(UIElementComponent.self, from: entity),
             uiLabel: world.getComponent(UILabelComponent.self, from: entity),
             uiImage: world.getComponent(UIImageComponent.self, from: entity),
-            uiPanel: world.getComponent(UIPanelComponent.self, from: entity)
+            uiPanel: world.getComponent(UIPanelComponent.self, from: entity),
+            lightmap: world.getComponent(LightmapComponent.self, from: entity),
+            lightProbe: world.getComponent(LightProbeComponent.self, from: entity),
+            reflectionProbe: world.getComponent(ReflectionProbeComponent.self, from: entity),
+            heightFog: world.getComponent(HeightFogComponent.self, from: entity)
         )
     }
 
@@ -77,6 +85,10 @@ public struct EntitySnapshot {
         if let uiLabel { world.addComponent(uiLabel, to: entity) }
         if let uiImage { world.addComponent(uiImage, to: entity) }
         if let uiPanel { world.addComponent(uiPanel, to: entity) }
+        if let lightmap { world.addComponent(lightmap, to: entity) }
+        if let lightProbe { world.addComponent(lightProbe, to: entity) }
+        if let reflectionProbe { world.addComponent(reflectionProbe, to: entity) }
+        if let heightFog { world.addComponent(heightFog, to: entity) }
     }
 
     public var displayName: String {

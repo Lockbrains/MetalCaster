@@ -35,6 +35,7 @@ public final class EditorState {
     public let meshRenderSystem = MeshRenderSystem()
     public let skyboxSystem = SkyboxSystem()
     public let postProcessVolumeSystem = PostProcessVolumeSystem()
+    public let probeSystem = ProbeSystem()
 
     // MARK: - Audio
 
@@ -185,8 +186,10 @@ public final class EditorState {
     public var showAISettings = false
     public var showShaderCanvas = false
     public var showSDFCanvas = false
+    public var showSceneComposer = false
     public var showProfiler = false
     public var showFrameDebugger = false
+    public var showModelConverterPanel = false
     public var currentFileURL: URL? = nil
     public var sceneName: String = "Untitled Scene"
     public var isSceneDirty: Bool = false
@@ -220,6 +223,7 @@ public final class EditorState {
     public enum AssetViewMode: String, CaseIterable {
         case list = "List"
         case grid = "Grid"
+        case preview = "Preview"
     }
 
     // MARK: - Build System
@@ -440,6 +444,7 @@ public final class EditorState {
         engine.addSystem(lightingSystem)
         engine.addSystem(skyboxSystem)
         engine.addSystem(postProcessVolumeSystem)
+        engine.addSystem(probeSystem)
         engine.addSystem(meshRenderSystem)
         engine.addSystem(audioSystem)
 
@@ -540,6 +545,36 @@ public final class EditorState {
     }
 
     @discardableResult
+    public func addMeshAssetToScene(guid: UUID, name: String, parent: Entity? = nil) -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: name, parent: parent)
+        engine.world.addComponent(MeshComponent(meshType: .asset(guid)), to: entity)
+        engine.world.addComponent(
+            MaterialComponent(material: MaterialRegistry.litMaterial),
+            to: entity
+        )
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    /// Returns all mesh asset entries from the project's Meshes directory.
+    public func meshAssetEntries() -> [AssetEntry] {
+        assetDatabase.entries(in: .meshes).filter { entry in
+            !entry.isDirectory && AssetCategory.meshExtensions.contains(entry.fileExtension.lowercased())
+        }
+    }
+
+    /// Whether the given GUID corresponds to a mesh asset file.
+    public func isMeshAsset(guid: UUID) -> Bool {
+        guard let url = assetDatabase.resolveURL(for: guid) else { return false }
+        return AssetCategory.meshExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    @discardableResult
     public func addCamera() -> Entity {
         commitPendingEdit()
         let entity = sceneGraph.createEntity(name: "Camera", position: SIMD3<Float>(0, 2, 8))
@@ -617,6 +652,45 @@ public final class EditorState {
         return entity
     }
 
+    @discardableResult
+    public func addLightProbe() -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Light Probe", position: SIMD3<Float>(0, 2, 0))
+        engine.world.addComponent(LightProbeComponent(), to: entity)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    @discardableResult
+    public func addReflectionProbe() -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Reflection Probe", position: SIMD3<Float>(0, 2, 0))
+        engine.world.addComponent(ReflectionProbeComponent(), to: entity)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
+    @discardableResult
+    public func addHeightFog() -> Entity {
+        commitPendingEdit()
+        let entity = sceneGraph.createEntity(name: "Height Atmospheric Fog")
+        engine.world.addComponent(HeightFogComponent(), to: entity)
+        selectedEntity = entity
+        let snapshot = EntitySnapshot.capture(entity: entity, world: engine.world)
+        recordCommand(CreateEntityCommand(snapshot: snapshot, initialEntityID: entity.id))
+        worldRevision += 1
+        markDirty()
+        return entity
+    }
+
     /// Creates a new entity with default-initialized components matching the given archetype signature.
     @discardableResult
     public func addEntityFromArchetype(componentNames: Set<String>) -> Entity {
@@ -645,6 +719,14 @@ public final class EditorState {
                 world.addComponent(PostProcessVolumeComponent(), to: entity)
             case GameplayScriptRef.componentName:
                 world.addComponent(GameplayScriptRef(), to: entity)
+            case LightmapComponent.componentName:
+                world.addComponent(LightmapComponent(), to: entity)
+            case LightProbeComponent.componentName:
+                world.addComponent(LightProbeComponent(), to: entity)
+            case ReflectionProbeComponent.componentName:
+                world.addComponent(ReflectionProbeComponent(), to: entity)
+            case HeightFogComponent.componentName:
+                world.addComponent(HeightFogComponent(), to: entity)
             case ManagerComponent.componentName:
                 break // managers should not be spawned this way
             default:
@@ -1085,6 +1167,39 @@ public final class EditorState {
         usdImporter.importAsset(from: url, into: engine.world, sceneGraph: sceneGraph)
         worldRevision += 1
         markDirty()
+    }
+
+    /// Converts a model file to USDA and imports it into the project's Meshes directory.
+    public func convertAndImportModel(from sourceURL: URL) {
+        #if canImport(ModelIO) && canImport(SceneKit)
+        guard let meshesRoot = projectManager.directoryURL(for: .meshes) else {
+            print("[ModelConverter] Meshes directory unavailable")
+            return
+        }
+
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent
+        let destURL = meshesRoot.appendingPathComponent(baseName + ".usda")
+
+        let converter = ModelConverter()
+        do {
+            try converter.convert(from: sourceURL, to: destURL)
+
+            if let relativePath = projectManager.relativePath(for: destURL, from: projectManager.projectRoot!) {
+                _ = projectManager.ensureMeta(for: relativePath, type: .meshes)
+            }
+            selectedAssetCategory = .meshes
+            refreshAssetBrowser()
+            print("[ModelConverter] Converted \(sourceURL.lastPathComponent) → \(destURL.lastPathComponent)")
+        } catch {
+            print("[ModelConverter] Conversion failed: \(error.localizedDescription)")
+        }
+        #endif
+    }
+
+    /// Converts a mesh asset in-place to USDA format.
+    public func convertMeshAssetToUSDA(entry: AssetEntry) {
+        guard let url = assetDatabase.resolveURL(for: entry.guid) else { return }
+        convertAndImportModel(from: url)
     }
 
     /// Forces the asset browser to re-read from disk.

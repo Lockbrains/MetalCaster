@@ -31,8 +31,8 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
 
     public var acceptedExtensions: Set<String> {
         switch self {
-        case .scenes:    return ["usda", "mcscene", "mcmeta"]
-        case .meshes:    return ["usdz", "usd", "usda", "usdc", "obj"]
+        case .scenes:    return ["usda", "mcscene", "mcmeta", "mcterrain"]
+        case .meshes:    return ["usdz", "usd", "usda", "usdc", "obj", "stl", "ply", "abc", "dae", "fbx"]
         case .textures:  return ["png", "jpg", "jpeg", "tiff", "exr", "hdr"]
         case .materials: return ["mcmat"]
         case .shaders:   return ["metal"]
@@ -41,6 +41,9 @@ public enum AssetCategory: String, CaseIterable, Codable, Sendable, Identifiable
         case .gameplay:  return ["swift", "prompt"]
         }
     }
+
+    /// File extensions recognized as 3D mesh files.
+    public static let meshExtensions: Set<String> = ["usdz", "usd", "usda", "usdc", "obj", "stl", "ply", "abc", "dae", "fbx"]
 
     /// Detect the asset category from a file extension.
     public static func category(for fileExtension: String) -> AssetCategory? {

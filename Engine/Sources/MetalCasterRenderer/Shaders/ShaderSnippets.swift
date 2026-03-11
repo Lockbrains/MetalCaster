@@ -709,31 +709,72 @@ public struct ShaderSnippets {
     #include <metal_stdlib>
     using namespace metal;
 
-    struct GridVertexIn {
-        float3 position [[attribute(0)]];
+    struct GridUniforms {
+        float4x4 viewProjectionMatrix;
+        float4x4 invViewProjectionMatrix;
+        float4   cameraPosition;
     };
 
     struct GridVertexOut {
         float4 position [[position]];
-        float4 color;
+        float3 nearPoint;
+        float3 farPoint;
     };
 
-    struct GridUniforms {
-        float4x4 viewProjectionMatrix;
-    };
+    vertex GridVertexOut grid_vertex(uint vertexID [[vertex_id]],
+                                     constant GridUniforms &uniforms [[buffer(0)]]) {
+        float2 pos[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
+        float2 p = pos[vertexID];
 
-    vertex GridVertexOut grid_vertex(GridVertexIn in [[stage_in]],
-                                     constant GridUniforms &uniforms [[buffer(1)]],
-                                     constant float4 *colors [[buffer(2)]],
-                                     uint vid [[vertex_id]]) {
+        float4 nearH = uniforms.invViewProjectionMatrix * float4(p, 0.0, 1.0);
+        float4 farH  = uniforms.invViewProjectionMatrix * float4(p, 1.0, 1.0);
+
         GridVertexOut out;
-        out.position = uniforms.viewProjectionMatrix * float4(in.position, 1.0);
-        out.color = colors[vid / 2];
+        out.nearPoint = nearH.xyz / nearH.w;
+        out.farPoint  = farH.xyz / farH.w;
+        out.position  = float4(p, 0.0, 1.0);
         return out;
     }
 
-    fragment float4 grid_fragment(GridVertexOut in [[stage_in]]) {
-        return in.color;
+    float gridLineAlpha(float3 wp, float scale) {
+        float2 coord = wp.xz * scale;
+        float2 dv    = fwidth(coord);
+        float2 g     = abs(fract(coord - 0.5) - 0.5) / dv;
+        return 1.0 - min(min(g.x, g.y), 1.0);
+    }
+
+    fragment float4 grid_fragment(GridVertexOut in [[stage_in]],
+                                   constant GridUniforms &uniforms [[buffer(0)]]) {
+        float denom = in.farPoint.y - in.nearPoint.y;
+        if (abs(denom) < 1e-7) discard_fragment();
+
+        float t = -in.nearPoint.y / denom;
+        if (t < 0.0) discard_fragment();
+
+        float3 wp   = in.nearPoint + t * (in.farPoint - in.nearPoint);
+        float  dist = length(wp.xz - uniforms.cameraPosition.xz);
+
+        float minorFade = 1.0 - smoothstep(8.0,  40.0,  dist);
+        float majorFade = 1.0 - smoothstep(30.0, 120.0, dist);
+        float axisFade  = 1.0 - smoothstep(40.0, 180.0, dist);
+
+        float minor = gridLineAlpha(wp, 1.0);
+        float major = gridLineAlpha(wp, 0.2);
+
+        float3 color = float3(1.0);
+        float  alpha = max(minor * 0.08 * minorFade, major * 0.25 * majorFade);
+
+        float2 dv = fwidth(wp.xz);
+        float xAxisLine = 1.0 - min(abs(wp.z) / max(dv.y, 1e-4), 1.0);
+        float zAxisLine = 1.0 - min(abs(wp.x) / max(dv.x, 1e-4), 1.0);
+        float xAxisA = xAxisLine * 0.6 * axisFade;
+        float zAxisA = zAxisLine * 0.6 * axisFade;
+
+        if (xAxisA > alpha) { color = float3(0.85, 0.2, 0.2); alpha = xAxisA; }
+        if (zAxisA > alpha) { color = float3(0.2, 0.2, 0.85); alpha = zAxisA; }
+
+        if (alpha < 0.001) discard_fragment();
+        return float4(color, alpha);
     }
     """
 
@@ -1010,5 +1051,146 @@ public struct ShaderSnippets {
         float4 baseColor = inTexture.sample(s, uv);
         float3 result = mix(baseColor.rgb, _edgeColor, edge * _edgeStrength);
         return float4(result, 1.0); }
+    """
+
+    // MARK: - GI & Probe Shader Snippets
+
+    /// MSL struct declarations for light probes, reflection probes, and height fog.
+    /// Include this header in any shader that needs to access probe/fog data.
+    public static let probeDataStructs = """
+    struct LightProbeData {
+        float3 position;
+        float radius;
+        float shR[9];
+        float shG[9];
+        float shB[9];
+        float intensity;
+        float _pad0;
+        float _pad1;
+        float _pad2;
+    };
+
+    struct ReflectionProbeData {
+        float3 position;
+        float radius;
+        float3 boxMin;
+        float blendDistance;
+        float3 boxMax;
+        float intensity;
+        uint shape;       // 0=sphere, 1=box
+        uint priority;
+        uint cubemapIndex;
+        uint _pad0;
+    };
+
+    struct HeightFogData {
+        float3 color;
+        float density;
+        float baseHeight;
+        float heightFalloff;
+        float maxOpacity;
+        float startDistance;
+        float3 inscatteringColor;
+        float inscatteringIntensity;
+        float inscatteringExponent;
+        uint mode;        // 0=exp, 1=exp²
+        uint enabled;
+        uint _pad0;
+    };
+    """
+
+    /// SH L2 evaluation — reconstructs irradiance from 9 SH coefficients per channel.
+    public static let shEvaluation = """
+    float3 evaluateSH(float3 normal, float shR[9], float shG[9], float shB[9]) {
+        float x = normal.x;
+        float y = normal.y;
+        float z = normal.z;
+
+        // L0
+        float basis0 = 0.282095;
+        // L1
+        float basis1 = 0.488603 * y;
+        float basis2 = 0.488603 * z;
+        float basis3 = 0.488603 * x;
+        // L2
+        float basis4 = 1.092548 * x * y;
+        float basis5 = 1.092548 * y * z;
+        float basis6 = 0.315392 * (3.0 * z * z - 1.0);
+        float basis7 = 1.092548 * x * z;
+        float basis8 = 0.546274 * (x * x - y * y);
+
+        float r = shR[0]*basis0 + shR[1]*basis1 + shR[2]*basis2 + shR[3]*basis3
+                + shR[4]*basis4 + shR[5]*basis5 + shR[6]*basis6 + shR[7]*basis7 + shR[8]*basis8;
+        float g = shG[0]*basis0 + shG[1]*basis1 + shG[2]*basis2 + shG[3]*basis3
+                + shG[4]*basis4 + shG[5]*basis5 + shG[6]*basis6 + shG[7]*basis7 + shG[8]*basis8;
+        float b = shB[0]*basis0 + shB[1]*basis1 + shB[2]*basis2 + shB[3]*basis3
+                + shB[4]*basis4 + shB[5]*basis5 + shB[6]*basis6 + shB[7]*basis7 + shB[8]*basis8;
+
+        return max(float3(r, g, b), float3(0.0));
+    }
+    """
+
+    /// Lightmap sampling — samples baked indirect lighting from a lightmap texture.
+    public static let lightmapSampling = """
+    float3 sampleLightmap(float2 lightmapUV, texture2d<float> lightmapTex, float intensity) {
+        constexpr sampler lightmapSampler(address::clamp_to_edge, filter::linear);
+        float3 lm = lightmapTex.sample(lightmapSampler, lightmapUV).rgb;
+        return lm * intensity;
+    }
+    """
+
+    /// Height fog computation — calculates fog factor from world position and camera.
+    public static let heightFogComputation = """
+    float4 computeHeightFog(float3 worldPos, float3 cameraPos, HeightFogData fog, float3 mainLightDir) {
+        if (fog.enabled == 0) return float4(0.0, 0.0, 0.0, 0.0);
+
+        float dist = length(worldPos - cameraPos);
+        float effectiveDist = max(dist - fog.startDistance, 0.0);
+
+        float heightDiff = worldPos.y - fog.baseHeight;
+        float heightFactor = exp(-max(heightDiff, 0.0) * fog.heightFalloff);
+
+        float fogAmount;
+        if (fog.mode == 0) {
+            fogAmount = 1.0 - exp(-fog.density * effectiveDist * heightFactor);
+        } else {
+            float d = fog.density * effectiveDist * heightFactor;
+            fogAmount = 1.0 - exp(-d * d);
+        }
+        fogAmount = min(fogAmount, fog.maxOpacity);
+
+        float3 viewDir = normalize(worldPos - cameraPos);
+        float sunDot = max(dot(viewDir, -mainLightDir), 0.0);
+        float inscatter = pow(sunDot, fog.inscatteringExponent) * fog.inscatteringIntensity;
+        float3 fogColor = mix(fog.color, fog.inscatteringColor, inscatter);
+
+        return float4(fogColor, fogAmount);
+    }
+    """
+
+    /// Reflection probe box projection — parallax-corrects the reflection vector.
+    public static let reflectionProbeBoxProject = """
+    float3 boxProjectDirection(float3 reflDir, float3 worldPos, float3 boxMin, float3 boxMax) {
+        float3 firstIntersect  = (boxMax - worldPos) / reflDir;
+        float3 secondIntersect = (boxMin - worldPos) / reflDir;
+        float3 furthest = max(firstIntersect, secondIntersect);
+        float dist = min(min(furthest.x, furthest.y), furthest.z);
+        float3 intersectPos = worldPos + reflDir * dist;
+        float3 probeCenter = (boxMin + boxMax) * 0.5;
+        return normalize(intersectPos - probeCenter);
+    }
+
+    float reflectionProbeWeight(float3 worldPos, ReflectionProbeData probe) {
+        float3 center = (probe.boxMin + probe.boxMax) * 0.5;
+        if (probe.shape == 0) {
+            float d = length(worldPos - center);
+            return saturate(1.0 - d / probe.radius);
+        }
+        float3 halfSize = (probe.boxMax - probe.boxMin) * 0.5;
+        float3 local = abs(worldPos - center);
+        float3 edge = max(local - halfSize + probe.blendDistance, float3(0.0));
+        float d = length(edge) / max(probe.blendDistance, 0.001);
+        return saturate(1.0 - d);
+    }
     """
 }

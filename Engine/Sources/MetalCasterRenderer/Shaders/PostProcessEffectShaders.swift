@@ -803,11 +803,101 @@ public struct PostProcessEffectShaders {
 
     """
 
+    // MARK: - Height Fog
+
+    public static let heightFog: String = """
+
+    struct HeightFogUniforms {
+        float fogColorR;
+        float fogColorG;
+        float fogColorB;
+        float density;
+        float baseHeight;
+        float heightFalloff;
+        float maxOpacity;
+        float startDistance;
+        float inscatterColorR;
+        float inscatterColorG;
+        float inscatterColorB;
+        float inscatterIntensity;
+        float inscatterExponent;
+        float mode;   // 0=exp, 1=exp²
+        float nearZ;
+        float farZ;
+        float cameraPositionX;
+        float cameraPositionY;
+        float cameraPositionZ;
+        float screenWidth;
+        float screenHeight;
+        float _pad0;
+        float _pad1;
+        float _pad2;
+        float4x4 inverseViewProjection;
+    };
+
+    float3 reconstructWorldPos(float2 uv, float depth, float4x4 invVP) {
+        float2 ndc = uv * 2.0 - 1.0;
+        ndc.y = -ndc.y;
+        float4 clipPos = float4(ndc, depth, 1.0);
+        float4 worldPos = invVP * clipPos;
+        return worldPos.xyz / worldPos.w;
+    }
+
+    fragment float4 height_fog_fragment(
+        PPVertexOut in [[stage_in]],
+        texture2d<float> colorTexture [[texture(0)]],
+        texture2d<float> depthTexture [[texture(1)]],
+        constant HeightFogUniforms &params [[buffer(0)]]
+    ) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float4 color = colorTexture.sample(s, in.uv);
+        float depth = depthTexture.sample(s, in.uv).r;
+
+        // Skip sky pixels (depth at far plane)
+        if (depth >= 1.0) return color;
+
+        float3 worldPos = reconstructWorldPos(in.uv, depth, params.inverseViewProjection);
+        float3 cameraPos = float3(params.cameraPositionX, params.cameraPositionY, params.cameraPositionZ);
+
+        float dist = length(worldPos - cameraPos);
+        float effectiveDist = max(dist - params.startDistance, 0.0);
+
+        float heightDiff = worldPos.y - params.baseHeight;
+        float heightFactor = exp(-max(heightDiff, 0.0) * params.heightFalloff);
+
+        float fogAmount;
+        if (params.mode < 0.5) {
+            fogAmount = 1.0 - exp(-params.density * effectiveDist * heightFactor);
+        } else {
+            float d = params.density * effectiveDist * heightFactor;
+            fogAmount = 1.0 - exp(-d * d);
+        }
+        fogAmount = min(fogAmount, params.maxOpacity);
+
+        float3 fogColor = float3(params.fogColorR, params.fogColorG, params.fogColorB);
+
+        // Inscattering (sun glow effect toward light direction)
+        if (params.inscatterIntensity > 0.001) {
+            float3 viewDir = normalize(worldPos - cameraPos);
+            // Approximate: inscatter toward the brightest direction (up-hemisphere sun)
+            float3 lightDir = normalize(float3(0.4, -0.9, -0.5));
+            float sunDot = max(dot(viewDir, -lightDir), 0.0);
+            float inscatter = pow(sunDot, params.inscatterExponent) * params.inscatterIntensity;
+            float3 inscatterColor = float3(params.inscatterColorR, params.inscatterColorG, params.inscatterColorB);
+            fogColor = mix(fogColor, inscatterColor, saturate(inscatter));
+        }
+
+        color.rgb = mix(color.rgb, fogColor, fogAmount);
+        return color;
+    }
+
+    """
+
     // MARK: - Combined Source
 
     public static var allSource: String {
         sharedHeader + fullscreenVertex + bloom + colorGrading + vignette +
         chromaticAberration + filmGrain + lensDistortion + panini + ssao +
-        fxaa + fullscreenBlur + fullscreenOutline
+        fxaa + fullscreenBlur + fullscreenOutline + heightFog
     }
 }

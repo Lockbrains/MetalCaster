@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import MetalCasterCore
 import MetalCasterRenderer
 import MetalCasterScene
@@ -98,6 +99,18 @@ struct EditorContentView: View {
                 }
             }
         )
+        .fileImporter(
+            isPresented: Binding(
+                get: { state.showModelConverterPanel },
+                set: { state.showModelConverterPanel = $0 }
+            ),
+            allowedContentTypes: Self.modelConverterTypes,
+            onCompletion: { result in
+                if case .success(let url) = result {
+                    state.convertAndImportModel(from: url)
+                }
+            }
+        )
         .sheet(isPresented: Binding(
             get: { state.showBuildPanel },
             set: { state.showBuildPanel = $0 }
@@ -119,6 +132,9 @@ struct EditorContentView: View {
         }
         .onChange(of: state.showSDFCanvas) { _, show in
             if show { ToolWindowManager.open(.sdfCanvas, state: state) }
+        }
+        .onChange(of: state.showSceneComposer) { _, show in
+            if show { ToolWindowManager.open(.sceneComposer, state: state) }
         }
         .onChange(of: state.showProfiler) { _, show in
             if show { ToolWindowManager.open(.profiler, state: state) }
@@ -319,6 +335,20 @@ struct EditorContentView: View {
             Spacer()
         }
     }
+
+    private static let modelConverterTypes: [UTType] = {
+        var types: [UTType] = []
+        if let obj = UTType(filenameExtension: "obj") { types.append(obj) }
+        if let stl = UTType(filenameExtension: "stl") { types.append(stl) }
+        if let ply = UTType(filenameExtension: "ply") { types.append(ply) }
+        if let dae = UTType(filenameExtension: "dae") { types.append(dae) }
+        if let fbx = UTType(filenameExtension: "fbx") { types.append(fbx) }
+        if let abc = UTType(filenameExtension: "abc") { types.append(abc) }
+        types.append(.usdz)
+        if let usdc = UTType(filenameExtension: "usdc") { types.append(usdc) }
+        if types.isEmpty { types.append(.data) }
+        return types
+    }()
 }
 
 // MARK: - Build Panel (dark-themed)

@@ -1,4 +1,5 @@
 import SwiftUI
+import SceneKit
 import MetalCasterCore
 import MetalCasterAsset
 import MetalCasterRenderer
@@ -194,9 +195,12 @@ struct ProjectAssetsView: View {
             } else {
                 breadcrumbBar
                 Divider().background(MCTheme.panelBorder)
-                if state.assetViewMode == .grid {
+                switch state.assetViewMode {
+                case .grid:
                     assetGridView
-                } else {
+                case .preview:
+                    assetPreviewView
+                case .list:
                     assetListView
                 }
             }
@@ -432,6 +436,116 @@ struct ProjectAssetsView: View {
         }
     }
 
+    // MARK: - Asset Preview Mode
+
+    private var assetPreviewView: some View {
+        let _ = state.assetBrowserRevision
+        let entries = state.assetDatabase.entries(
+            in: state.selectedAssetCategory,
+            subfolder: state.assetBrowserSubfolder
+        ).filter { !Self.hiddenExtensions.contains($0.fileExtension.lowercased()) && !$0.isDirectory }
+
+        return HStack(spacing: 0) {
+            previewMainArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider().background(MCTheme.panelBorder)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(entries) { entry in
+                        previewFileRow(entry: entry)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(width: 180)
+        }
+    }
+
+    @ViewBuilder
+    private var previewMainArea: some View {
+        if let selected = state.selectedAssetEntry,
+           let url = state.assetDatabase.resolveURL(for: selected.guid) {
+            let ext = selected.fileExtension.lowercased()
+            if AssetCategory.meshExtensions.contains(ext) && selected.category == .meshes {
+                #if canImport(SceneKit)
+                MCScenePreviewView(url: url)
+                    .background(Color.black)
+                #endif
+            } else if Self.previewImageExtensions.contains(ext) {
+                #if canImport(AppKit)
+                if let nsImage = NSImage(contentsOf: url) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.black)
+                } else {
+                    previewPlaceholder
+                }
+                #else
+                previewPlaceholder
+                #endif
+            } else {
+                previewPlaceholder
+            }
+        } else {
+            previewPlaceholder
+        }
+    }
+
+    private var previewPlaceholder: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 8) {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 32, weight: .thin))
+                    .foregroundStyle(MCTheme.textTertiary)
+                Text("Select a file to preview")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textTertiary)
+            }
+        }
+    }
+
+    private func previewFileRow(entry: AssetEntry) -> some View {
+        let isSelected = state.selectedAssetEntry?.guid == entry.guid
+
+        return Button {
+            state.selectedEntity = nil
+            state.selectedAssetEntry = entry
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: previewFileIcon(for: entry))
+                    .font(.system(size: 10))
+                    .foregroundStyle(MCTheme.textTertiary)
+                    .frame(width: 14)
+                Text("\(entry.name).\(entry.fileExtension)")
+                    .font(MCTheme.fontCaption)
+                    .foregroundStyle(MCTheme.textPrimary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(isSelected ? MCTheme.surfaceSelected : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func previewFileIcon(for entry: AssetEntry) -> String {
+        let ext = entry.fileExtension.lowercased()
+        if AssetCategory.meshExtensions.contains(ext) { return "cube" }
+        if Self.previewImageExtensions.contains(ext) { return "photo" }
+        return "doc"
+    }
+
+    private static let previewImageExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"
+    ]
+
     private var emptyStateView: some View {
         VStack(spacing: 8) {
             Spacer()
@@ -514,6 +628,17 @@ struct ProjectAssetsView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(
                             state.assetViewMode == .grid ? MCTheme.textPrimary : MCTheme.textTertiary
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    state.assetViewMode = .preview
+                } label: {
+                    Image(systemName: "eye")
+                        .font(.system(size: 10))
+                        .foregroundStyle(
+                            state.assetViewMode == .preview ? MCTheme.textPrimary : MCTheme.textTertiary
                         )
                 }
                 .buttonStyle(.plain)
@@ -704,6 +829,22 @@ struct AssetListRow: View {
             } label: {
                 Label("Open", systemImage: "arrow.up.forward.square")
             }
+
+            if entry.category == .meshes {
+                Button {
+                    state.addMeshAssetToScene(guid: entry.guid, name: entry.name)
+                } label: {
+                    Label("Add to Scene", systemImage: "plus.square.on.square")
+                }
+
+                if entry.fileExtension.lowercased() != "usda" {
+                    Button {
+                        state.convertMeshAssetToUSDA(entry: entry)
+                    } label: {
+                        Label("Convert to USDA", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+            }
         }
 
         if isPromptFile {
@@ -772,6 +913,8 @@ struct AssetListRow: View {
                 if let url = state.assetDatabase.resolveURL(for: entry.guid) {
                     state.requestLoadScene(from: url)
                 }
+            case .meshes:
+                state.addMeshAssetToScene(guid: entry.guid, name: entry.name)
             case .materials:
                 if let url = state.assetDatabase.resolveURL(for: entry.guid),
                    entry.fileExtension.lowercased() == "mcmat" {
@@ -925,6 +1068,7 @@ struct AssetGridCell: View {
     @State private var isDropTarget = false
 
     private static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
+    private static let meshExtensions: Set<String> = ["usda", "usdz", "usd", "usdc", "obj", "stl", "ply", "dae", "fbx"]
     private static let doubleClickInterval: TimeInterval = 0.3
     private static let inspectableExtensions: Set<String> = ["jpg", "jpeg", "png", "tiff", "tif", "exr", "hdr", "bmp", "gif", "webp"]
 
@@ -979,7 +1123,8 @@ struct AssetGridCell: View {
             } else {
                 lastClickTime = now
                 let ext = entry.fileExtension.lowercased()
-                if ext == "mcmat" || Self.inspectableExtensions.contains(ext) {
+                if ext == "mcmat" || Self.inspectableExtensions.contains(ext)
+                    || (entry.category == .meshes && Self.meshExtensions.contains(ext)) {
                     state.selectedEntity = nil
                 }
                 state.selectedAssetEntry = entry
@@ -1006,6 +1151,22 @@ struct AssetGridCell: View {
                 state.enterAssetSubfolder(entry.name)
             } label: {
                 Label("Open", systemImage: "folder")
+            }
+        }
+
+        if !entry.isDirectory && entry.category == .meshes {
+            Button {
+                state.addMeshAssetToScene(guid: entry.guid, name: entry.name)
+            } label: {
+                Label("Add to Scene", systemImage: "plus.square.on.square")
+            }
+
+            if entry.fileExtension.lowercased() != "usda" {
+                Button {
+                    state.convertMeshAssetToUSDA(entry: entry)
+                } label: {
+                    Label("Convert to USDA", systemImage: "arrow.triangle.2.circlepath")
+                }
             }
         }
 
@@ -1113,21 +1274,28 @@ struct AssetGridCell: View {
     private func loadThumbnail() {
         guard !entry.isDirectory else { return }
         let ext = entry.fileExtension.lowercased()
-        guard Self.imageExtensions.contains(ext) else { return }
         guard let url = state.assetDatabase.resolveURL(for: entry.guid) else { return }
 
-        DispatchQueue.global(qos: .utility).async {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: 128,
-                kCGImageSourceCreateThumbnailWithTransform: true
-            ]
-            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return }
-            let nsImg = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-            DispatchQueue.main.async {
-                self.thumbnail = nsImg
+        if Self.imageExtensions.contains(ext) {
+            DispatchQueue.global(qos: .utility).async {
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 128,
+                    kCGImageSourceCreateThumbnailWithTransform: true
+                ]
+                guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return }
+                let nsImg = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                DispatchQueue.main.async {
+                    self.thumbnail = nsImg
+                }
             }
+        } else if entry.category == .meshes && Self.meshExtensions.contains(ext) {
+            #if canImport(AppKit)
+            MeshThumbnailCache.shared.thumbnail(for: url) { image in
+                self.thumbnail = image
+            }
+            #endif
         }
     }
 }

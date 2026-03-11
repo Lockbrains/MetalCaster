@@ -6,6 +6,7 @@ import simd
 // MARK: - SDF Canvas Pro View
 
 struct SDFCanvasProView: View {
+    @Environment(EditorState.self) private var editorState
 
     // MARK: - SDF State
 
@@ -739,20 +740,98 @@ struct SDFCanvasProView: View {
             DispatchQueue.main.async {
                 isExporting = false
                 showingExportPanel = false
-
-                let panel = NSSavePanel()
-                panel.allowedContentTypes = [UTType(filenameExtension: "usda")!]
-                panel.nameFieldStringValue = canvasName + ".usda"
-                panel.begin { response in
-                    guard response == .OK, let url = panel.url else { return }
-                    do {
-                        try usda.write(to: url, atomically: true, encoding: .utf8)
-                    } catch {
-                        print("[SDFCanvas] Export failed: \(error)")
-                    }
-                }
+                exportUSDAIntoProjectMeshes(usda)
             }
         }
+    }
+
+    private func exportUSDAIntoProjectMeshes(_ usda: String) {
+        guard let meshesRoot = editorState.projectManager.directoryURL(for: .meshes) else {
+            print("[SDFCanvas] Meshes directory unavailable")
+            return
+        }
+
+        let preferredDirectory: URL = {
+            guard editorState.selectedAssetCategory == .meshes,
+                  let sub = editorState.assetBrowserSubfolder,
+                  !sub.isEmpty else {
+                return meshesRoot
+            }
+            return meshesRoot.appendingPathComponent(sub, isDirectory: true)
+        }()
+
+        presentMeshesSavePanel(
+            initialDirectory: preferredDirectory,
+            meshesRoot: meshesRoot,
+            defaultFilename: canvasName + ".usda"
+        ) { url in
+            guard let url else { return }
+            do {
+                try usda.write(to: url, atomically: true, encoding: .utf8)
+                registerExportedMesh(url)
+            } catch {
+                print("[SDFCanvas] Export failed: \(error)")
+            }
+        }
+    }
+
+    private func registerExportedMesh(_ url: URL) {
+        guard let root = editorState.projectManager.projectRoot,
+              let relativePath = editorState.projectManager.relativePath(for: url, from: root) else {
+            return
+        }
+        _ = editorState.projectManager.ensureMeta(for: relativePath, type: .meshes)
+        editorState.selectedAssetCategory = .meshes
+        editorState.refreshAssetBrowser()
+    }
+
+    private func presentMeshesSavePanel(
+        initialDirectory: URL,
+        meshesRoot: URL,
+        defaultFilename: String,
+        completion: @escaping (URL?) -> Void
+    ) {
+        let panel = NSSavePanel()
+        panel.title = "Export Mesh to Project"
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [UTType(filenameExtension: "usda") ?? .plainText]
+        panel.canCreateDirectories = true
+        panel.directoryURL = initialDirectory
+        panel.nameFieldStringValue = defaultFilename
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else {
+                completion(nil)
+                return
+            }
+            guard isInsideMeshesDirectory(url, meshesRoot: meshesRoot) else {
+                showInvalidExportPathAlert(meshesRoot: meshesRoot)
+                presentMeshesSavePanel(
+                    initialDirectory: meshesRoot,
+                    meshesRoot: meshesRoot,
+                    defaultFilename: defaultFilename,
+                    completion: completion
+                )
+                return
+            }
+            completion(url)
+        }
+    }
+
+    private func isInsideMeshesDirectory(_ url: URL, meshesRoot: URL) -> Bool {
+        let candidate = url.resolvingSymlinksInPath().standardizedFileURL
+        let root = meshesRoot.resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = root.path.hasSuffix("/") ? root.path : (root.path + "/")
+        return candidate.path == root.path || candidate.path.hasPrefix(rootPath)
+    }
+
+    private func showInvalidExportPathAlert(meshesRoot: URL) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Export location is restricted"
+        alert.informativeText = "SDF meshes can only be exported into this project's Meshes folder:\n\(meshesRoot.path)"
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 

@@ -84,4 +84,14 @@ public enum AgentDefinitions {
             tools: AudioAgentPrompt.tools
         )
     }
+
+    // MARK: - Composer Agent
+
+    public static func composerAgent() -> MCAgent {
+        MCAgent(
+            role: .composer,
+            systemPrompt: ComposerAgentPrompt.systemPrompt,
+            tools: ComposerAgentPrompt.tools
+        )
+    }
 }
